@@ -1,0 +1,81 @@
+version: "3.9"
+
+x-backend-env: &backend-env
+  env_file:
+    - .env
+  depends_on:
+    postgres:
+      condition: service_healthy
+    redis:
+      condition: service_healthy
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: quantpilot
+      POSTGRES_PASSWORD: quantpilot
+      POSTGRES_DB: quantpilot
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U quantpilot"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  api:
+    build: ./backend
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./backend:/app
+    <<: *backend-env
+
+  # KIS WebSocket 실시간 시세 수집 전용 프로세스 (장시간 상시 연결, Celery와 분리)
+  ingestor:
+    build: ./backend
+    command: python -m app.features.market_data.ingestor
+    volumes:
+      - ./backend:/app
+    <<: *backend-env
+
+  # 전략 조건 평가 루프: Redis 시세 캐시를 구독해 신호 발생 시 trading Celery task를 호출
+  strategy-runner:
+    build: ./backend
+    command: python -m app.features.strategy.runner
+    volumes:
+      - ./backend:/app
+    <<: *backend-env
+
+  # 주문 실행 등 부수효과가 있는 작업 (재시도/멱등성 필요)
+  celery-worker:
+    build: ./backend
+    command: celery -A app.celery_app worker --loglevel=info --concurrency=4
+    volumes:
+      - ./backend:/app
+    <<: *backend-env
+
+  # 토큰 갱신, 일일 정산/리컨실 등 정기 작업
+  celery-beat:
+    build: ./backend
+    command: celery -A app.celery_app beat --loglevel=info
+    volumes:
+      - ./backend:/app
+    <<: *backend-env
+
+volumes:
+  pgdata:

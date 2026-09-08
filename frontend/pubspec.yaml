@@ -1,0 +1,35 @@
+name: quantpilot
+description: "실시간 시장 감시 및 전략 기반 자동매매 앱"
+publish_to: 'none'
+version: 1.0.0+1
+
+environment:
+  sdk: ^3.13.0
+
+dependencies:
+  flutter:
+    sdk: flutter
+  cupertino_icons: ^1.0.8
+
+  # 상태 관리
+  flutter_riverpod: ^2.6.1
+
+  # 백엔드 REST 통신
+  dio: ^5.7.0
+
+  # 백엔드 WebSocket(/ws/live) 실시간 시세/주문 업데이트 구독
+  web_socket_channel: ^3.0.1
+
+  # JWT 액세스 토큰 저장 (일반 SharedPreferences가 아닌 암호화 저장소 사용)
+  flutter_secure_storage: ^9.2.2
+
+  # 시세 차트
+  fl_chart: ^0.69.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+
+flutter:
+  uses-material-design: true
