@@ -1,6 +1,12 @@
+import asyncio
+
 from app.celery_app import celery_app
 from app.core.config import get_settings
-from app.features.broker.kis.auth import KISCredentials
+from app.core.exceptions import BrokerAPIError
+from app.core.logging import get_logger
+from app.features.broker.kis.auth import KISAuth, KISCredentials
+
+logger = get_logger(__name__)
 
 
 @celery_app.task
@@ -16,4 +22,8 @@ def refresh_kis_token() -> None:
         )
         if not creds.app_key:
             continue  # 해당 모드 자격증명 미설정 시 skip
-        # TODO: asyncio.run(KISAuth(creds, mode_key)._issue_token())
+
+        try:
+            asyncio.run(KISAuth(creds, mode_key).refresh_token())
+        except BrokerAPIError:
+            logger.exception("KIS token refresh failed (%s)", mode_key)
