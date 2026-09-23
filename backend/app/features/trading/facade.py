@@ -100,21 +100,24 @@ class OrderExecutionFacade:
         order.avg_fill_price = result.avg_fill_price
         order = await self._orders.update(order)
 
-        # 6. 체결분만큼 포지션 갱신
+        # 6. 체결분만큼 포지션 갱신 + 매도 체결이면 실현손익을 일일 손실 한도 추적에 반영
         if result.filled_quantity > 0 and result.avg_fill_price is not None:
-            await self._apply_fill_to_position(
+            realized_pnl = await self._apply_fill_to_position(
                 asset_class=asset_class,
                 symbol=symbol,
                 side=side,
                 filled_quantity=result.filled_quantity,
                 fill_price=result.avg_fill_price,
             )
+            if side == "sell" and realized_pnl != 0.0:
+                await self._risk_guard.record_fill_pnl(realized_pnl)
 
         return order
 
     async def _apply_fill_to_position(
         self, *, asset_class: str, symbol: str, side: str, filled_quantity: float, fill_price: float
-    ) -> None:
+    ) -> float:
+        """포지션을 갱신하고, 매도 체결이면 실현손익(원)을 반환한다 (매수는 0.0)."""
         signed_qty = filled_quantity if side == "buy" else -filled_quantity
         existing = await self._positions.get_by_symbol(symbol)
 
@@ -122,7 +125,7 @@ class OrderExecutionFacade:
             if signed_qty <= 0:
                 # 보유 포지션이 없는데 매도 체결 — 데이터 불일치. 감사 로그만 남기고 무시.
                 logger.warning("sell fill with no existing position: %s", symbol)
-                return
+                return 0.0
             position = Position(
                 asset_class=asset_class,
                 symbol=symbol,
@@ -130,13 +133,17 @@ class OrderExecutionFacade:
                 avg_entry_price=fill_price,
             )
             await self._positions.upsert(position)
-            return
+            return 0.0
 
+        realized_pnl = 0.0
         new_quantity = existing.quantity + signed_qty
         if side == "buy":
             # 가중평균 진입가 재계산
             total_cost = existing.avg_entry_price * existing.quantity + fill_price * filled_quantity
             existing.avg_entry_price = total_cost / new_quantity if new_quantity > 0 else fill_price
-        # 매도는 진입가를 바꾸지 않는다 — 남은 수량 기준 평단가는 그대로 유지.
+        else:
+            # 매도는 진입가를 바꾸지 않는다 — 남은 수량 기준 평단가는 그대로 유지.
+            realized_pnl = (fill_price - existing.avg_entry_price) * filled_quantity
         existing.quantity = new_quantity
         await self._positions.upsert(existing)
+        return realized_pnl

@@ -26,6 +26,10 @@ class Settings(BaseSettings):
     trading_mode: TradingMode = TradingMode.PAPER
     kill_switch_default: bool = False
 
+    # 오늘 실현손익이 이 금액(원)만큼 손실을 넘으면 kill switch를 자동으로 발동한다.
+    # None이면 비활성화 (전략별 stop_loss_pct와는 별개의 계좌 전체 서킷브레이커).
+    daily_loss_limit_krw: float | None = None
+
     kis_paper_app_key: str = ""
     kis_paper_app_secret: str = ""
     kis_paper_account_no: str = ""

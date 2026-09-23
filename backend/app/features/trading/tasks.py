@@ -18,7 +18,7 @@ from app.features.broker.base import AssetClass
 from app.features.broker.factory import get_broker_adapter
 from app.features.notification.factory import get_notification_service
 from app.features.risk.guard import RiskGuard
-from app.features.risk.redis_repository import RedisKillSwitchRepository
+from app.features.risk.redis_repository import RedisDailyPnlRepository, RedisKillSwitchRepository
 from app.features.trading.facade import OrderExecutionFacade
 from app.features.trading.repository import SqlAlchemyOrderRepository, SqlAlchemyPositionRepository
 
@@ -42,6 +42,8 @@ async def _submit_order(
             risk_guard=RiskGuard(
                 kill_switch=RedisKillSwitchRepository(),
                 notifier=get_notification_service(),
+                daily_pnl=RedisDailyPnlRepository(),
+                daily_loss_limit_krw=settings.daily_loss_limit_krw,
             ),
             broker=get_broker_adapter(AssetClass(asset_class)),
         )

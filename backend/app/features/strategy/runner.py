@@ -19,6 +19,7 @@ import time
 import uuid
 from collections import defaultdict
 
+from app.core.config import get_settings
 from app.core.exceptions import RiskLimitExceededError
 from app.core.logging import configure_logging, get_logger
 from app.db.session import AsyncSessionLocal
@@ -26,7 +27,7 @@ from app.features.broker.base import AssetClass
 from app.features.market_data.factory import get_price_cache
 from app.features.notification.factory import get_notification_service
 from app.features.risk.guard import RiskGuard
-from app.features.risk.redis_repository import RedisKillSwitchRepository
+from app.features.risk.redis_repository import RedisDailyPnlRepository, RedisKillSwitchRepository
 from app.features.strategy.engine import MarketSnapshot, Signal, evaluate_entry, evaluate_exit
 from app.features.strategy.models import Strategy
 from app.features.strategy.repository import SqlAlchemyStrategyRepository
@@ -106,9 +107,12 @@ async def _evaluate_strategy(
 
 async def run() -> None:
     configure_logging()
+    settings = get_settings()
     risk_guard = RiskGuard(
         kill_switch=RedisKillSwitchRepository(),
         notifier=get_notification_service(),
+        daily_pnl=RedisDailyPnlRepository(),
+        daily_loss_limit_krw=settings.daily_loss_limit_krw,
     )
     price_cache = get_price_cache()
     price_history: dict[str, list[float]] = defaultdict(list)

@@ -54,7 +54,7 @@ flutter run --dart-define=API_BASE_URL=http://localhost:8000/api/v1 --dart-defin
 | 전략 러너 | 활성 전략 동적 로드, 손절/포지션 한도 실연결 | ✅ |
 | 시세 수집기 | 감시 종목 동적 로드 (활성 전략 기반) | ✅ |
 | KIS/Upbit 실연동 | 인증, 주문, 실시간 시세 WebSocket | ⬜ (앱키 발급 후) |
-| 일일 손실 한도 | 전체 계좌 단위 서킷브레이커 | ⬜ |
+| 일일 손실 한도 | 전체 계좌 단위 서킷브레이커 (매도 체결마다 실현손익 누적, 한도 초과 시 kill switch 자동 발동) | ✅ |
 
 세부 설계는 [`ARCHITECTURE.md`](./ARCHITECTURE.md), 다음 단계 후보는 그 문서 8절을 참고하세요.
 

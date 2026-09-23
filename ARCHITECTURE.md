@@ -74,6 +74,7 @@ flowchart LR
 - **모의/실전 분리**: `TRADING_MODE` 환경변수(paper/live)가 유일한 스위치이며 `broker/factory.py` 한 곳에서만 분기한다. KIS는 모의투자 전용 서버·자격증명이 별도로 존재하고, Upbit은 모의투자 서버가 없어 `paper` 모드에서는 실제 API를 호출하지 않고 리스크 가드의 시뮬레이션 체결 경로를 사용하도록 강제한다 (`broker/upbit/client.py`의 `_require_live`).
 - **비상 정지(kill switch)**: Redis의 `kill_switch:global` 키 하나로 전체 신규 주문을 즉시 차단. 앱 대시보드에 상시 노출되는 버튼 → `POST /risk/kill-switch/engage` → 이후 모든 주문 경로(`RiskGuard.assert_can_trade`)가 이 값을 먼저 확인한다.
 - **손절/포지션 한도**: 전략별 `stop_loss_pct`, `max_position_size`를 `RiskGuard.check_stop_loss` / `check_position_size`에서 체크, 초과 시 `RiskLimitExceededError`로 주문을 거부하고 감사 로그를 남긴다.
+- **일일 손실 한도**: 전략별 손절과는 별개로, 계좌 전체 기준 상위 서킷브레이커. 매도 체결마다 실현손익을 `DailyPnlRepository`(Redis, KST 날짜 기준 자동 리셋)에 누적하고, `DAILY_LOSS_LIMIT_KRW`를 넘으면 `RiskGuard`가 kill switch를 자동 발동한다 — 그 뒤로는 기존 kill switch 경로가 모든 신규 주문을 그대로 차단한다.
 - **멱등성**: 모든 주문은 `client_order_id`를 미리 발급해 Celery task 재시도 시 중복 주문을 방지한다 (`OrderRequest.client_order_id`, `Order.client_order_id` unique 제약).
 - **자격증명 분리**: `.env`에서 paper/live 앱키·시크릿을 완전히 분리된 변수로 관리해, live 자격증명이 실수로 paper 경로에 쓰이는 것을 원천 차단한다.
 

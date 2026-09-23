@@ -17,3 +17,17 @@ class KillSwitchRepository(ABC):
 
     @abstractmethod
     async def release(self) -> None: ...
+
+
+class DailyPnlRepository(ABC):
+    """일일 실현손익 누적 — 전략별 stop_loss_pct와 별개로, 계좌 전체의 하루 손실 한도를
+    감시하기 위한 저장소. 날짜가 바뀌면 자동으로 0부터 다시 시작해야 한다.
+    """
+
+    @abstractmethod
+    async def record_realized_pnl(self, amount: float) -> float:
+        """오늘 누적 실현손익에 amount(음수면 손실)를 더하고, 갱신된 누적값을 반환."""
+        ...
+
+    @abstractmethod
+    async def get_today_realized_pnl(self) -> float: ...
