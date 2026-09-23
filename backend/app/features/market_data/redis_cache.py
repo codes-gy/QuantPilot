@@ -27,7 +27,12 @@ class RedisPriceCache(PriceCachePort):
     async def cache_tick(self, asset_class: AssetClass, tick: Tick) -> None:
         redis = get_redis()
         payload = json.dumps(
-            {"price": tick.price, "volume": tick.volume, "timestamp": tick.timestamp}
+            {
+                "symbol": tick.symbol,
+                "price": tick.price,
+                "volume": tick.volume,
+                "timestamp": tick.timestamp,
+            }
         )
         key = _price_key(asset_class, tick.symbol)
         await redis.set(key, payload, ex=_TICK_TTL_SECONDS)

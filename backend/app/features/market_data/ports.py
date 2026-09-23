@@ -20,5 +20,8 @@ class PriceCachePort(ABC):
 
     @abstractmethod
     def subscribe(self, asset_class: AssetClass, symbols: list[str]) -> AsyncIterator[dict]:
-        """symbols에 대한 실시간 틱을 {"price", "volume", "timestamp"} dict로 yield."""
+        """symbols에 대한 실시간 틱을 {"symbol", "price", "volume", "timestamp"} dict로 yield.
+
+        여러 심볼을 동시에 구독하므로 "symbol" 필드로 어느 종목의 틱인지 구분해야 한다.
+        """
         ...
