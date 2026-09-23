@@ -1,7 +1,7 @@
 """KIS 실시간 시세 WebSocket 클라이언트 (H0STCNT0: 국내주식 실시간 체결가).
 
 market_data/ingestor.py 가 이 어댑터를 장시간 구동하며 수신한 Tick을
-market_data/cache.py 를 통해 Redis에 반영한다.
+market_data/redis_cache.py(PriceCachePort 구현체)를 통해 Redis에 반영한다.
 """
 
 from collections.abc import AsyncIterator

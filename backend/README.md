@@ -17,6 +17,19 @@ docker compose up --build
 `api`, `ingestor`(시세 수집), `strategy-runner`(전략 평가), `celery-worker`(주문 실행),
 `celery-beat`(정기 작업), `postgres`, `redis` — 각 역할은 `ARCHITECTURE.md` 3절 참고.
 
+## 사용자 계정 생성
+
+공개 회원가입 엔드포인트는 없다 (개인용 프로젝트라 외부에 노출하지 않기 위함).
+마이그레이션 적용 후 CLI로 최초 계정을 생성한다:
+
+```bash
+docker compose exec api python -m scripts.create_user user@example.com
+```
+
+이후 `/auth/login`으로 로그인해 발급받은 JWT를 `Authorization: Bearer <token>` 헤더로
+사용한다. `/health`, `/auth/login`을 제외한 모든 REST 엔드포인트와 `/ws/live`(쿼리
+파라미터 `?token=<access_token>`)가 이 토큰을 요구한다.
+
 ## 마이그레이션
 
 ```bash

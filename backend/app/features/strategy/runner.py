@@ -9,12 +9,14 @@ Celery task로 실행을 위임한다 (주문 자체는 재시도가 필요한 �
 """
 
 import asyncio
-import json
+import uuid
 
 from app.core.logging import configure_logging, get_logger
 from app.features.broker.base import AssetClass
-from app.features.market_data.cache import subscribe_price_channel
+from app.features.market_data.factory import get_price_cache
+from app.features.notification.factory import get_notification_service
 from app.features.risk.guard import RiskGuard
+from app.features.risk.redis_repository import RedisKillSwitchRepository
 from app.features.strategy.engine import MarketSnapshot, Signal, evaluate_entry, evaluate_exit
 from app.features.trading.tasks import submit_order_task
 
@@ -23,17 +25,17 @@ logger = get_logger(__name__)
 
 async def run() -> None:
     configure_logging()
-    risk_guard = RiskGuard()
+    risk_guard = RiskGuard(
+        kill_switch=RedisKillSwitchRepository(),
+        notifier=get_notification_service(),
+    )
+    price_cache = get_price_cache()
 
-    # TODO: DB에서 활성(status=active) 전략 목록/심볼을 로드해 동적으로 구독
+    # TODO: StrategyRepository(SqlAlchemyStrategyRepository).list_active()로 활성 전략을
+    #       동적으로 로드해 심볼을 구독 (5단계 범위 — 러너의 전략 로딩 로직 자체는 별도 작업)
     watched_symbols: list[str] = []
-    pubsub = await subscribe_price_channel(AssetClass.KR_STOCK, watched_symbols)
 
-    async for message in pubsub.listen():
-        if message["type"] != "message":
-            continue
-        data = json.loads(message["data"])
-
+    async for data in price_cache.subscribe(AssetClass.KR_STOCK, watched_symbols):
         # TODO: 심볼에 매핑된 전략들을 순회하며 MarketSnapshot 구성 후 평가
         snapshot = MarketSnapshot(symbol="", price=data["price"], price_history=[])
         strategy_entry_rule: dict = {}
@@ -47,7 +49,14 @@ async def run() -> None:
             signal = evaluate_exit(strategy_exit_rule, snapshot) if strategy_exit_rule else Signal.HOLD
 
         if signal is not Signal.HOLD:
-            submit_order_task.delay(symbol=snapshot.symbol, side=signal.value)
+            # TODO: quantity는 전략의 max_position_size/포지션 사이징 규칙에서 결정해야 함
+            #       (지금은 5단계 전략 매핑 로직 미구현 상태라 placeholder)
+            submit_order_task.delay(
+                client_order_id=str(uuid.uuid4()),
+                symbol=snapshot.symbol,
+                side=signal.value,
+                quantity=1.0,
+            )
 
 
 if __name__ == "__main__":

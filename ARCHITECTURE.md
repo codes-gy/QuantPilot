@@ -77,26 +77,45 @@ flowchart LR
 - **멱등성**: 모든 주문은 `client_order_id`를 미리 발급해 Celery task 재시도 시 중복 주문을 방지한다 (`OrderRequest.client_order_id`, `Order.client_order_id` unique 제약).
 - **자격증명 분리**: `.env`에서 paper/live 앱키·시크릿을 완전히 분리된 변수로 관리해, live 자격증명이 실수로 paper 경로에 쓰이는 것을 원천 차단한다.
 
-## 6. 폴더 구조 요약
+## 6. 헥사고날 아키텍처 (포트 & 어댑터)
+
+`broker/`(base.py=포트, kis/·upbit/=어댑터)의 패턴을 모든 feature에 동일하게 적용한다.
+
+- **`ports.py`**: 해당 feature의 서비스/도메인 로직이 의존하는 추상 인터페이스(ABC). 저장소가
+  DB인지 Redis인지, 알림 채널이 무엇인지 등은 여기서 드러나지 않는다.
+- **어댑터** (`repository.py`, `redis_repository.py`, `redis_cache.py`, `ws_channel.py` 등):
+  포트를 구체 인프라(SQLAlchemy, Redis, WebSocket)로 구현한다. 인프라를 교체하거나
+  테스트용 in-memory 구현체로 바꿔도 이 파일들만 손대면 된다.
+- **`service.py`**: 애플리케이션 서비스. 생성자로 포트를 주입받아 오케스트레이션만 담당하고,
+  구체 어댑터를 직접 import하지 않는다.
+- **조립 지점**: `router.py`(또는 `factory.py`)가 유일하게 구체 어댑터를 선택해 서비스에
+  주입한다 — `get_<feature>_service()` 형태의 FastAPI dependency 함수가 그 역할을 한다.
+
+적용 범위: `account`, `risk`, `notification`, `strategy`, `trading`, `market_data`.
+`strategy/engine.py`처럼 순수 함수로만 이루어진 도메인 로직은 애초에 인프라 의존성이
+없어 포트가 필요 없다.
+
+## 7. 폴더 구조 요약
 
 ```
 QuantPilot/
 ├── ARCHITECTURE.md
 ├── docker-compose.yml
 ├── .env.example
-├── backend/                        # FastAPI, Package by Feature
+├── backend/                        # FastAPI, Package by Feature + 헥사고날(포트/어댑터)
 │   ├── app/
-│   │   ├── core/                   # config, security(JWT), logging, exceptions
+│   │   ├── core/                   # config, security(JWT), deps(인증 dependency), logging, exceptions
 │   │   ├── db/                     # SQLAlchemy base/session, Redis client
 │   │   ├── ws/                     # Flutter 앱으로의 실시간 릴레이(WS)
 │   │   └── features/
-│   │       ├── account/            # 로그인/JWT (단일 사용자 기준 최소 구현)
-│   │       ├── broker/             # 자산군 공용 어댑터 인터페이스 + kis/, upbit/
-│   │       ├── market_data/        # 시세 캐싱(Redis), ingestor(상시 프로세스), 이력(Postgres)
-│   │       ├── strategy/           # 전략 CRUD, 평가 엔진, runner(상시 프로세스)
-│   │       ├── trading/            # 주문 모델, Celery task, 이력 조회
-│   │       ├── risk/               # kill switch, 손절/포지션 한도 가드
-│   │       └── notification/       # 이벤트 알림(현재 앱 WS 채널만 구현)
+│   │       ├── account/            # ports.py, repository.py(어댑터), service.py, router.py(조립)
+│   │       ├── broker/             # 자산군 공용 어댑터 인터페이스(포트) + kis/, upbit/(어댑터) — 기준 패턴
+│   │       ├── market_data/        # ports.py, redis_cache.py(어댑터), factory.py(조립), ingestor(상시 프로세스)
+│   │       ├── strategy/           # ports.py, repository.py, service.py, engine.py(순수 도메인), runner(상시 프로세스)
+│   │       ├── trading/            # ports.py(Order/Position), repository.py, service.py, Celery task
+│   │       ├── risk/               # ports.py(KillSwitchRepository), redis_repository.py, guard.py
+│   │       └── notification/       # ports.py(NotificationChannel), ws_channel.py, factory.py
+│   ├── scripts/                    # 일회성 운영 스크립트 (create_user.py 등)
 │   ├── alembic/                    # DB 마이그레이션
 │   └── tests/
 └── frontend/                       # Flutter
@@ -106,7 +125,7 @@ QuantPilot/
             └── {feature}/{data,domain,presentation}/
 ```
 
-## 7. 다음 단계 후보
+## 8. 다음 단계 후보
 
 - KIS/Upbit 실제 REST·WS 연동 구현 (`TODO`로 표시된 자리들)
 - 전략 엔진 규칙 타입 확장 (RSI, 볼린저밴드 등) 및 백테스트 모듈

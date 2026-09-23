@@ -11,7 +11,7 @@ import asyncio
 from app.core.logging import configure_logging, get_logger
 from app.features.broker.base import AssetClass
 from app.features.broker.factory import get_market_data_adapter
-from app.features.market_data.cache import cache_tick
+from app.features.market_data.factory import get_price_cache
 
 logger = get_logger(__name__)
 
@@ -22,10 +22,11 @@ WATCHED_CRYPTO = ["KRW-BTC"]  # placeholder
 
 async def _run_feed(asset_class: AssetClass, symbols: list[str]) -> None:
     adapter = get_market_data_adapter(asset_class)
+    price_cache = get_price_cache()
     while True:
         try:
             async for tick in adapter.subscribe(symbols):
-                await cache_tick(asset_class, tick)
+                await price_cache.cache_tick(asset_class, tick)
         except Exception:
             logger.exception("market data feed disconnected (%s), retrying in 3s", asset_class)
             await asyncio.sleep(3)  # 지수 백오프로 교체 권장
