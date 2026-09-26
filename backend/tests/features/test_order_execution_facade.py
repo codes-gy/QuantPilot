@@ -56,6 +56,9 @@ class InMemoryPositionRepository(PositionRepository):
         self._positions_by_symbol[position.symbol] = position
         return position
 
+    async def list_all(self) -> list[Position]:
+        return [p for p in self._positions_by_symbol.values() if p.quantity != 0]
+
 
 class FakeBroker(BrokerAdapter):
     asset_class = AssetClass.KR_STOCK

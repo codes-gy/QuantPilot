@@ -15,3 +15,12 @@ class OrderOut(BaseModel):
     trading_mode: str
 
     model_config = {"from_attributes": True}
+
+
+class PositionOut(BaseModel):
+    symbol: str
+    asset_class: str
+    quantity: float
+    avg_entry_price: float
+
+    model_config = {"from_attributes": True}

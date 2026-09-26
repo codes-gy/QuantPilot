@@ -34,3 +34,8 @@ class PositionRepository(ABC):
 
     @abstractmethod
     async def upsert(self, position: Position) -> Position: ...
+
+    @abstractmethod
+    async def list_all(self) -> list[Position]:
+        """대시보드의 보유 포지션 요약(GET /positions)이 사용한다."""
+        ...

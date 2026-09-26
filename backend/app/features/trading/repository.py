@@ -61,3 +61,10 @@ class SqlAlchemyPositionRepository(PositionRepository):
         await self._db.commit()
         await self._db.refresh(existing or position)
         return existing or position
+
+    async def list_all(self) -> list[Position]:
+        # 잔고 0인 포지션(전량 매도 후 남은 레코드)은 대시보드에서 의미가 없으므로 제외한다.
+        result = await self._db.execute(
+            select(Position).where(Position.quantity != 0).order_by(Position.symbol.asc())
+        )
+        return list(result.scalars().all())
