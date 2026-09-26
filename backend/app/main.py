@@ -11,6 +11,7 @@ from app.ws.router import router as ws_router
 
 configure_logging()
 settings = get_settings()
+settings.assert_safe_to_start()  # live 모드인데 기본 시크릿/빈 자격증명이면 여기서 기동을 거부한다
 
 app = FastAPI(title="QuantPilot API")
 

@@ -11,6 +11,8 @@
 ## 특징
 
 - **모의/실전 완전 분리**: `TRADING_MODE`(paper/live) 하나로만 전환, 자격증명도 분리 보관
+- **Live 모드 기동 안전장치**: 실전 모드인데 기본 시크릿 키나 빈 KIS 자격증명이면 애플리케이션
+  기동 자체를 거부
 - **비상 정지(kill switch)**: 버튼 한 번으로 모든 신규 주문 즉시 차단
 - **손절/포지션 한도**: 전략별 리스크 가드가 주문 제출 전 항상 재확인
 - **헥사고날 아키텍처(포트 & 어댑터)**: 도메인 로직이 DB·Redis·브로커 API 등 인프라를
@@ -44,6 +46,18 @@ flutter pub get
 flutter run --dart-define=API_BASE_URL=http://localhost:8000/api/v1 --dart-define=WS_URL=ws://localhost:8000/ws/live
 ```
 
+### 백엔드 테스트 실행
+
+```bash
+cd backend
+python -m venv .venv && source .venv/bin/activate
+pip install -r requirements.txt
+pytest -v
+```
+
+DB/Redis 없이도 통과합니다 (RiskGuard/OrderExecutionFacade는 포트 인터페이스에만 의존하도록
+설계되어 있어, 테스트에서는 인메모리 fake로 대체합니다).
+
 ## 진행 현황
 
 | 단계 | 내용 | 상태 |
@@ -56,6 +70,9 @@ flutter run --dart-define=API_BASE_URL=http://localhost:8000/api/v1 --dart-defin
 | KIS 실연동 | 인증, 주문, 실시간 시세 WebSocket | ✅ (모의투자 앱키로 실제 검증 필요) |
 | Upbit 실연동 | 인증, 주문, 실시간 시세 WebSocket | ⬜ |
 | 일일 손실 한도 | 전체 계좌 단위 서킷브레이커 (매도 체결마다 실현손익 누적, 한도 초과 시 kill switch 자동 발동) | ✅ |
+| 테스트 | RiskGuard/OrderExecutionFacade/live 모드 안전장치 단위 테스트 (24개) | ✅ |
+| CI | GitHub Actions — ruff lint + import 스모크 테스트 + pytest (`backend/` 변경 시) | ✅ |
+| Live 모드 안전장치 | `TRADING_MODE=live`인데 기본 시크릿/빈 KIS 자격증명이면 기동 자체를 거부 | ✅ |
 
 세부 설계는 [`ARCHITECTURE.md`](./ARCHITECTURE.md), 다음 단계 후보는 그 문서 8절을 참고하세요.
 

@@ -1,0 +1,54 @@
+name: Backend CI
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "backend/**"
+      - ".github/workflows/backend-ci.yaml"
+  push:
+    branches: [main]
+    paths:
+      - "backend/**"
+      - ".github/workflows/backend-ci.yaml"
+
+defaults:
+  run:
+    working-directory: backend
+
+jobs:
+  lint-and-test:
+    name: Lint & Test
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+          cache-dependency-path: backend/requirements.txt
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+          pip install ruff==0.6.9 # pyproject.toml에 [tool.ruff] 설정은 있지만 아직 의존성 목록엔 없어서 여기서 직접 설치
+
+      - name: Lint (ruff)
+        run: ruff check .
+
+      # 앱이 실제로 임포트 가능한지(설정 로딩, 순환 참조 등) 확인하는 최소한의 스모크 테스트.
+      # DB/Redis 클라이언트는 둘 다 지연 연결이라 실제 서비스 없이도 통과해야 한다.
+      - name: Import smoke test
+        env:
+          DATABASE_URL: postgresql+asyncpg://user:pass@localhost/quantpilot
+          REDIS_URL: redis://localhost:6379/0
+          CELERY_BROKER_URL: redis://localhost:6379/1
+          CELERY_RESULT_BACKEND: redis://localhost:6379/2
+        run: python -c "import app.main"
+
+      - name: Test (pytest)
+        run: pytest -v
