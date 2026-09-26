@@ -6,7 +6,7 @@
 
 - 아키텍처와 데이터 흐름, 안전장치 설계: [`ARCHITECTURE.md`](./ARCHITECTURE.md)
 - 백엔드(FastAPI): [`backend/`](./backend)
-- 프론트엔드(Flutter): [`frontend/`](./frontend)
+- 프론트엔드(Flutter): [`frontend/`](./frontend) — 화면별 구현 상태와 계획은 [`frontend/PLANNING.md`](./frontend/PLANNING.md) 참고
 
 ## 특징
 
