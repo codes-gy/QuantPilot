@@ -130,10 +130,6 @@ QuantPilot/
 ## 8. 다음 단계 후보
 
 - Upbit 실제 REST·WS 연동 구현 (KIS는 체결 확인 폴링까지 완료)
-- **Alembic 마이그레이션 파일이 아직 하나도 없음** — `env.py`는 모든 모델을 정상적으로 인식하지만,
-  실제 `alembic/versions/`가 비어 있어 스키마가 마이그레이션으로 재현되지 않는다. Postgres에
-  연결 가능한 환경에서 `alembic revision --autogenerate -m "initial schema"`로 베이스라인을
-  한 번 만들어야 한다 (이 세션에서는 로컬에 Postgres를 띄울 수 없어 직접 생성하지 못했다).
 - 전략 엔진 규칙 타입 확장 (RSI, 볼린저밴드 등) 및 백테스트 모듈
 - 알림 채널 확장 (푸시 알림, 이메일)
 - 시계열 데이터 규모가 커지면 TimescaleDB 도입 검토
