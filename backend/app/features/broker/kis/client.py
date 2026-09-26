@@ -91,7 +91,7 @@ class KISBrokerAdapter(BrokerAdapter):
         output = data["output"]
         broker_order_id = f"{output['KRX_FWDG_ORD_ORGNO']}:{output['ODNO']}"
         # order-cash 응답은 접수 확인일 뿐 체결 여부를 포함하지 않는다 — 체결 확인은
-        # 별도의 주문체결조회(inquire-daily-ccld) TR이 필요 (TODO: 체결 폴링/웹소켓 체결통보 연동)
+        # get_order_fill_status()를 통해 trading/tasks.py의 poll_pending_order_fills가 주기적으로 확인한다.
         return OrderResult(broker_order_id=broker_order_id, status="accepted", raw=data)
 
     async def cancel_order(self, broker_order_id: str) -> OrderResult:
