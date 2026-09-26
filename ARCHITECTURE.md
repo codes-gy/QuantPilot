@@ -128,8 +128,10 @@ QuantPilot/
 
 ## 8. 다음 단계 후보
 
-- KIS/Upbit 실제 REST·WS 연동 구현 (`TODO`로 표시된 자리들)
+- Upbit 실제 REST·WS 연동 구현 (KIS는 체결 확인 폴링까지 완료)
+- Kill switch 발동 사유를 DB에 영구 기록 (현재는 알림 전파만 됨 — 감사 로그 보완 필요)
 - 전략 엔진 규칙 타입 확장 (RSI, 볼린저밴드 등) 및 백테스트 모듈
 - 알림 채널 확장 (푸시 알림, 이메일)
 - 시계열 데이터 규모가 커지면 TimescaleDB 도입 검토
-- 배포 자동화(CI/CD), 클라우드 인프라 구성
+- 프론트엔드(Flutter) CI 추가 (백엔드는 `.github/workflows/backend-ci.yaml`로 이미 구성됨)
+- 클라우드 인프라 구성 및 배포 자동화(CD)

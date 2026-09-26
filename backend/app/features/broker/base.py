@@ -64,6 +64,14 @@ class BrokerAdapter(ABC):
     @abstractmethod
     async def get_balance(self) -> Balance: ...
 
+    @abstractmethod
+    async def get_order_fill_status(self, broker_order_id: str) -> OrderResult:
+        """주문 접수 이후의 체결 여부를 조회한다. place_order는 접수 확인만 반환하고
+        체결 여부를 포함하지 않는 브로커(KIS 등)가 있어서, trading/tasks.py의 주기 작업
+        (poll_pending_order_fills)이 이 메서드로 미체결 주문을 폴링한다.
+        """
+        ...
+
 
 class MarketDataAdapter(ABC):
     """실시간 시세 WebSocket 어댑터."""

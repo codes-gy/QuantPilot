@@ -102,17 +102,70 @@ class OrderExecutionFacade:
 
         # 6. 체결분만큼 포지션 갱신 + 매도 체결이면 실현손익을 일일 손실 한도 추적에 반영
         if result.filled_quantity > 0 and result.avg_fill_price is not None:
-            realized_pnl = await self._apply_fill_to_position(
-                asset_class=asset_class,
-                symbol=symbol,
-                side=side,
-                filled_quantity=result.filled_quantity,
-                fill_price=result.avg_fill_price,
-            )
-            if side == "sell" and realized_pnl != 0.0:
-                await self._risk_guard.record_fill_pnl(realized_pnl)
+            await self._settle_fill(order, filled_quantity=result.filled_quantity, fill_price=result.avg_fill_price)
 
         return order
+
+    async def apply_broker_fill_update(
+        self,
+        order: Order,
+        *,
+        status: OrderStatus,
+        filled_quantity: float,
+        avg_fill_price: float | None,
+    ) -> Order:
+        """체결 확인 폴링(trading/tasks.py의 poll_pending_order_fills)이 새로 알아낸 체결
+        정보를 기존 주문에 반영한다.
+
+        place_order 응답이 접수 확인뿐인 브로커(KIS)는 submit_order() 안에서 포지션을
+        갱신하지 못하므로, 이 메서드가 그 뒷단을 대신한다. order.filled_quantity에는
+        지금까지 이미 반영된 누적 체결 수량이 들어있다 — 이번 조회로 알아낸
+        filled_quantity와의 차이(신규 체결분)만 포지션/손익에 반영해서, 폴링 주기마다
+        같은 체결을 중복 반영하지 않는다.
+        """
+        previously_filled = order.filled_quantity
+        newly_filled = filled_quantity - previously_filled
+
+        order.status = status
+        order.filled_quantity = filled_quantity
+        order.avg_fill_price = avg_fill_price
+        order = await self._orders.update(order)
+
+        if newly_filled > 0 and avg_fill_price is not None:
+            await self._settle_fill(order, filled_quantity=newly_filled, fill_price=avg_fill_price)
+
+        return order
+
+    async def poll_and_apply_fill(self, order: Order) -> Order:
+        """미체결 주문의 체결 여부를 브로커에 확인하고, 변화가 있으면 반영한다.
+        trading/tasks.py의 poll_pending_order_fills가 미체결 주문마다 호출한다.
+        변화가 없으면(아직 그대로 미체결) order를 그대로 반환한다.
+        """
+        result = await self._broker.get_order_fill_status(order.broker_order_id)
+        if result.filled_quantity == order.filled_quantity and OrderStatus(result.status) == order.status:
+            return order
+
+        return await self.apply_broker_fill_update(
+            order,
+            status=OrderStatus(result.status),
+            filled_quantity=result.filled_quantity,
+            avg_fill_price=result.avg_fill_price,
+        )
+
+    async def _settle_fill(self, order: Order, *, filled_quantity: float, fill_price: float) -> None:
+        """체결 수량만큼 포지션을 갱신하고, 매도 체결이면 실현손익을 리스크 가드(일일 손실
+        한도 서킷브레이커)에 반영한다. submit_order()의 즉시 체결 응답 처리와
+        apply_broker_fill_update()의 폴링 결과 처리가 이 메서드를 공유한다.
+        """
+        realized_pnl = await self._apply_fill_to_position(
+            asset_class=order.asset_class,
+            symbol=order.symbol,
+            side=order.side,
+            filled_quantity=filled_quantity,
+            fill_price=fill_price,
+        )
+        if order.side == "sell" and realized_pnl != 0.0:
+            await self._risk_guard.record_fill_pnl(realized_pnl)
 
     async def _apply_fill_to_position(
         self, *, asset_class: str, symbol: str, side: str, filled_quantity: float, fill_price: float

@@ -45,3 +45,9 @@ class UpbitBrokerAdapter(BrokerAdapter):
         self._require_live()
         # TODO: GET /v1/accounts
         raise NotImplementedError
+
+    async def get_order_fill_status(self, broker_order_id: str) -> OrderResult:
+        self._require_live()
+        # TODO: GET /v1/order (Upbit은 주문 즉시 체결 응답을 포함하는 경우가 많아, KIS만큼
+        # 폴링이 필수는 아닐 수 있다 — 실제 연동 시 place_order 응답부터 다시 확인할 것)
+        raise NotImplementedError

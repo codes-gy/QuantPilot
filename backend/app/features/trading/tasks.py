@@ -13,6 +13,7 @@ import asyncio
 from app.celery_app import celery_app
 from app.core.config import get_settings
 from app.core.exceptions import BrokerAPIError, KillSwitchEngagedError, RiskLimitExceededError
+from app.core.logging import get_logger
 from app.db.session import AsyncSessionLocal
 from app.features.broker.base import AssetClass
 from app.features.broker.factory import get_broker_adapter
@@ -21,6 +22,8 @@ from app.features.risk.guard import RiskGuard
 from app.features.risk.redis_repository import RedisDailyPnlRepository, RedisKillSwitchRepository
 from app.features.trading.facade import OrderExecutionFacade
 from app.features.trading.repository import SqlAlchemyOrderRepository, SqlAlchemyPositionRepository
+
+logger = get_logger(__name__)
 
 
 async def _submit_order(
@@ -102,3 +105,51 @@ def submit_order_task(
         )
     except (KillSwitchEngagedError, RiskLimitExceededError):
         raise
+
+
+async def _poll_pending_order_fills() -> int:
+    """미체결(PENDING/ACCEPTED/PARTIALLY_FILLED) 상태인 주문들의 체결 여부를 브로커에
+    확인하고, 새로 체결된 만큼 포지션/손익에 반영한다. 반환값은 이번 실행에서 확인한
+    주문 수(로그/모니터링용).
+
+    place_order 응답에 이미 체결 정보가 포함되는 브로커(테스트 더블 등)는 submit_order()
+    시점에 이미 최종 상태가 되어 list_pending()에 애초에 걸리지 않으므로, 이 폴링은
+    KIS처럼 접수와 체결이 분리된 브로커에서만 실제로 의미가 있다.
+    """
+    settings = get_settings()
+    checked = 0
+    async with AsyncSessionLocal() as db:
+        orders_repo = SqlAlchemyOrderRepository(db)
+        facade = OrderExecutionFacade(
+            orders=orders_repo,
+            positions=SqlAlchemyPositionRepository(db),
+            risk_guard=RiskGuard(
+                kill_switch=RedisKillSwitchRepository(),
+                notifier=get_notification_service(),
+                daily_pnl=RedisDailyPnlRepository(),
+                daily_loss_limit_krw=settings.daily_loss_limit_krw,
+            ),
+            broker=get_broker_adapter(AssetClass.KR_STOCK),  # TODO: Upbit도 폴링이 필요해지면 asset_class별로 분기
+        )
+
+        pending_orders = await orders_repo.list_pending()
+        for order in pending_orders:
+            checked += 1
+            try:
+                await facade.poll_and_apply_fill(order)
+            except BrokerAPIError:
+                logger.warning(
+                    "failed to poll fill status for order %s, will retry next cycle", order.client_order_id
+                )
+                continue
+
+    return checked
+
+
+@celery_app.task
+def poll_pending_order_fills() -> int:
+    """celery-beat 주기 작업. 접수 확인만 반환하는 브로커(KIS)의 체결 여부를 짧은 주기로
+    확인해서 포지션/일일 손실 한도 서킷브레이커에 반영한다 (자세한 배경은
+    ARCHITECTURE.md 참고).
+    """
+    return asyncio.run(_poll_pending_order_fills())

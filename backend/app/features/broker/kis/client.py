@@ -10,6 +10,9 @@ broker_order_id 하나만 주고받으므로, place_order가 "{조직번호}:{�
 합쳐 반환하고 cancel_order에서 다시 분리한다.
 """
 
+from datetime import datetime
+from zoneinfo import ZoneInfo
+
 import httpx
 
 from app.core.config import get_settings
@@ -123,6 +126,77 @@ class KISBrokerAdapter(BrokerAdapter):
             raise BrokerAPIError(f"KIS order-rvsecncl failed: {data.get('msg1', response.text)}")
 
         return OrderResult(broker_order_id=broker_order_id, status="cancelled", raw=data)
+
+    async def get_order_fill_status(self, broker_order_id: str) -> OrderResult:
+        """당일 주문체결조회(inquire-daily-ccld)로 미체결/체결 여부를 확인한다.
+
+        ⚠️ place_order/cancel_order/get_balance와 달리, 이 TR(TTTC8001R/VTTC8001R)과
+        응답 필드명(tot_ccld_qty, ord_qty, avg_prvs 등)은 KIS 공식 문서를 기준으로
+        작성했고 실제 계좌로 검증하지 못했습니다. 실거래 투입 전 모의투자 계좌로
+        반드시 먼저 확인해주세요.
+        """
+        cano, prdt_cd = self._account_parts()
+        org_no, _, odno = broker_order_id.partition(":")
+        if not org_no or not odno:
+            raise BrokerAPIError(
+                f"invalid KIS broker_order_id (expected 'ORGNO:ODNO'): {broker_order_id}"
+            )
+
+        tr_id = "TTTC8001R" if self._live else "VTTC8001R"
+        today = datetime.now(tz=ZoneInfo("Asia/Seoul")).strftime("%Y%m%d")
+        params = {
+            "CANO": cano,
+            "ACNT_PRDT_CD": prdt_cd,
+            "INQR_STRT_DT": today,
+            "INQR_END_DT": today,
+            "SLL_BUY_DVSN_CD": "00",  # 00: 전체(매도+매수)
+            "PDNO": "",
+            "CCLD_DVSN": "00",  # 00: 전체(체결+미체결)
+            "ORD_GNO_BRNO": org_no,
+            "ODNO": odno,
+            "INQR_DVSN": "00",
+            "INQR_DVSN_1": "",
+            "INQR_DVSN_3": "00",
+            "EXCG_ID_DVSN_CD": "KRX",
+            "CTX_AREA_FK100": "",
+            "CTX_AREA_NK100": "",
+        }
+
+        response = await self._http.get(
+            "/uapi/domestic-stock/v1/trading/inquire-daily-ccld",
+            headers=await self._headers(tr_id),
+            params=params,
+        )
+        data = response.json()
+
+        if response.status_code != 200 or data.get("rt_cd") != "0":
+            raise BrokerAPIError(f"KIS inquire-daily-ccld failed: {data.get('msg1', response.text)}")
+
+        rows = data.get("output1", [])
+        if not rows:
+            # 이 시각 기준으로 아직 조회 결과가 없다 — 접수 상태 그대로 유지 (에러 아님)
+            return OrderResult(broker_order_id=broker_order_id, status="accepted", raw=data)
+
+        row = rows[0]
+        filled_qty = float(row.get("tot_ccld_qty") or 0)
+        ord_qty = float(row.get("ord_qty") or 0)
+        avg_price_raw = row.get("avg_prvs")
+        avg_price = float(avg_price_raw) if filled_qty > 0 and avg_price_raw else None
+
+        if filled_qty <= 0:
+            status = "accepted"
+        elif ord_qty > 0 and filled_qty >= ord_qty:
+            status = "filled"
+        else:
+            status = "partially_filled"
+
+        return OrderResult(
+            broker_order_id=broker_order_id,
+            status=status,
+            filled_quantity=filled_qty,
+            avg_fill_price=avg_price,
+            raw=data,
+        )
 
     async def get_balance(self) -> Balance:
         cano, prdt_cd = self._account_parts()

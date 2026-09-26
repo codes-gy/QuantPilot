@@ -67,7 +67,7 @@ DB/Redis 없이도 통과합니다 (RiskGuard/OrderExecutionFacade는 포트 인
 | 주문 실행 파이프라인 | `OrderExecutionFacade` — 리스크 재확인/멱등성/브로커 호출/포지션 갱신 | ✅ |
 | 전략 러너 | 활성 전략 동적 로드, 손절/포지션 한도 실연결 | ✅ |
 | 시세 수집기 | 감시 종목 동적 로드 (활성 전략 기반) | ✅ |
-| KIS 실연동 | 인증, 주문, 실시간 시세 WebSocket | ✅ (모의투자 앱키로 실제 검증 필요) |
+| KIS 실연동 | 인증, 주문, 실시간 시세 WebSocket, 체결 확인 폴링 | ✅ (모의투자 앱키로 실제 검증 필요) |
 | Upbit 실연동 | 인증, 주문, 실시간 시세 WebSocket | ⬜ |
 | 일일 손실 한도 | 전체 계좌 단위 서킷브레이커 (매도 체결마다 실현손익 누적, 한도 초과 시 kill switch 자동 발동) | ✅ |
 | 테스트 | RiskGuard/OrderExecutionFacade/live 모드 안전장치 단위 테스트 (24개) | ✅ |

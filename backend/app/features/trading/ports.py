@@ -15,6 +15,13 @@ class OrderRepository(ABC):
         ...
 
     @abstractmethod
+    async def list_pending(self) -> list[Order]:
+        """아직 최종 상태(FILLED/REJECTED/CANCELLED)에 도달하지 않은 주문 목록.
+        체결 확인 폴링(poll_pending_order_fills)이 매 주기 이 목록을 조회한다.
+        """
+        ...
+
+    @abstractmethod
     async def add(self, order: Order) -> Order: ...
 
     @abstractmethod

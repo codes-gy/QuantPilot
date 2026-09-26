@@ -3,8 +3,10 @@
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.features.trading.models import Order, Position
+from app.features.trading.models import Order, OrderStatus, Position
 from app.features.trading.ports import OrderRepository, PositionRepository
+
+_NON_FINAL_STATUSES = (OrderStatus.PENDING, OrderStatus.ACCEPTED, OrderStatus.PARTIALLY_FILLED)
 
 
 class SqlAlchemyOrderRepository(OrderRepository):
@@ -22,6 +24,15 @@ class SqlAlchemyOrderRepository(OrderRepository):
             select(Order).where(Order.client_order_id == client_order_id)
         )
         return result.scalar_one_or_none()
+
+    async def list_pending(self) -> list[Order]:
+        result = await self._db.execute(
+            select(Order)
+            .where(Order.status.in_([s.value for s in _NON_FINAL_STATUSES]))
+            .where(Order.broker_order_id.is_not(None))  # 브로커에 아직 안 나간 주문은 폴링 대상 아님
+            .order_by(Order.created_at.asc())
+        )
+        return list(result.scalars().all())
 
     async def add(self, order: Order) -> Order:
         self._db.add(order)
