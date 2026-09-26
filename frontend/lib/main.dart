@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import 'core/auth/auth_state_provider.dart';
 import 'core/theme/app_theme.dart';
+import 'features/account/presentation/login_screen.dart';
 import 'features/dashboard/presentation/dashboard_screen.dart';
 import 'features/orders/presentation/orders_screen.dart';
 import 'features/settings/presentation/settings_screen.dart';
@@ -11,18 +13,33 @@ void main() {
   runApp(const ProviderScope(child: QuantPilotApp()));
 }
 
-class QuantPilotApp extends StatelessWidget {
+class QuantPilotApp extends ConsumerWidget {
   const QuantPilotApp({super.key});
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
+    final authStatus = ref.watch(authStateProvider);
+
     return MaterialApp(
       title: 'QuantPilot',
       theme: AppTheme.light,
       darkTheme: AppTheme.dark,
-      // TODO: account/data의 저장된 토큰 유무에 따라 LoginScreen과 분기
-      home: const RootShell(),
+      home: switch (authStatus) {
+        AuthStatus.checking => const _SplashScreen(),
+        AuthStatus.unauthenticated => const LoginScreen(),
+        AuthStatus.authenticated => const RootShell(),
+      },
     );
+  }
+}
+
+/// secureStorage에서 저장된 토큰을 읽는 동안(비동기) 잠깐 보여주는 화면.
+class _SplashScreen extends StatelessWidget {
+  const _SplashScreen();
+
+  @override
+  Widget build(BuildContext context) {
+    return const Scaffold(body: Center(child: CircularProgressIndicator()));
   }
 }
 
