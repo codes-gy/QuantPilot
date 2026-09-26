@@ -1,3 +1,5 @@
+from datetime import datetime
+
 from pydantic import BaseModel
 
 
@@ -7,6 +9,11 @@ class KillSwitchRequest(BaseModel):
 
 class KillSwitchStatus(BaseModel):
     engaged: bool
+
+
+class KillSwitchAuditLogEntry(BaseModel):
+    reason: str
+    engaged_at: datetime
 
 
 class DailyPnlStatus(BaseModel):

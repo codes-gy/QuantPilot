@@ -33,6 +33,24 @@ async def test_engage_kill_switch_persists_state_and_notifies(kill_switch, notif
     assert notifier.events == [("kill_switch_engaged", "테스트 사유")]
 
 
+async def test_engage_kill_switch_records_reason_to_audit_log(kill_switch, audit_log):
+    guard = RiskGuard(kill_switch=kill_switch, audit_log=audit_log)
+
+    await guard.engage_kill_switch("일일 손실 한도 초과")
+
+    entries = await audit_log.list_recent()
+    assert [e.reason for e in entries] == ["일일 손실 한도 초과"]
+
+
+async def test_engage_kill_switch_works_without_audit_log(kill_switch, notifier):
+    """audit_log는 선택적 의존성이라, 주입하지 않아도 kill switch 자체는 정상 동작해야 한다."""
+    guard = RiskGuard(kill_switch=kill_switch, notifier=notifier)
+
+    await guard.engage_kill_switch("사유")  # 예외 없이 통과해야 함
+
+    assert await kill_switch.is_engaged() is True
+
+
 async def test_release_kill_switch_clears_state(kill_switch, notifier):
     guard = RiskGuard(kill_switch=kill_switch, notifier=notifier)
     await kill_switch.engage()

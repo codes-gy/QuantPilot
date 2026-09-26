@@ -20,6 +20,7 @@ from app.features.broker.factory import get_broker_adapter
 from app.features.notification.factory import get_notification_service
 from app.features.risk.guard import RiskGuard
 from app.features.risk.redis_repository import RedisDailyPnlRepository, RedisKillSwitchRepository
+from app.features.risk.repository import SqlAlchemyKillSwitchAuditLogRepository
 from app.features.trading.facade import OrderExecutionFacade
 from app.features.trading.repository import SqlAlchemyOrderRepository, SqlAlchemyPositionRepository
 
@@ -47,6 +48,7 @@ async def _submit_order(
                 notifier=get_notification_service(),
                 daily_pnl=RedisDailyPnlRepository(),
                 daily_loss_limit_krw=settings.daily_loss_limit_krw,
+                audit_log=SqlAlchemyKillSwitchAuditLogRepository(db),
             ),
             broker=get_broker_adapter(AssetClass(asset_class)),
         )
@@ -128,6 +130,7 @@ async def _poll_pending_order_fills() -> int:
                 notifier=get_notification_service(),
                 daily_pnl=RedisDailyPnlRepository(),
                 daily_loss_limit_krw=settings.daily_loss_limit_krw,
+                audit_log=SqlAlchemyKillSwitchAuditLogRepository(db),
             ),
             broker=get_broker_adapter(AssetClass.KR_STOCK),  # TODO: Upbit도 폴링이 필요해지면 asset_class별로 분기
         )

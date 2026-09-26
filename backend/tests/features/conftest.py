@@ -6,7 +6,8 @@ RiskGuard/OrderExecutionFacade는 포트(ABC)에만 의존하도록 설계되어
 
 import pytest
 
-from app.features.risk.ports import DailyPnlRepository, KillSwitchRepository
+from app.features.risk.models import KillSwitchAuditLog
+from app.features.risk.ports import DailyPnlRepository, KillSwitchAuditLogRepository, KillSwitchRepository
 
 
 class InMemoryKillSwitch(KillSwitchRepository):
@@ -45,6 +46,17 @@ class RecordingNotifier:
         self.events.append((event_type, message))
 
 
+class InMemoryKillSwitchAuditLog(KillSwitchAuditLogRepository):
+    def __init__(self) -> None:
+        self._entries: list[KillSwitchAuditLog] = []
+
+    async def record(self, reason: str) -> None:
+        self._entries.append(KillSwitchAuditLog(reason=reason))
+
+    async def list_recent(self, limit: int = 50) -> list[KillSwitchAuditLog]:
+        return list(reversed(self._entries))[:limit]
+
+
 @pytest.fixture
 def kill_switch() -> InMemoryKillSwitch:
     return InMemoryKillSwitch()
@@ -58,3 +70,8 @@ def daily_pnl() -> InMemoryDailyPnl:
 @pytest.fixture
 def notifier() -> RecordingNotifier:
     return RecordingNotifier()
+
+
+@pytest.fixture
+def audit_log() -> InMemoryKillSwitchAuditLog:
+    return InMemoryKillSwitchAuditLog()

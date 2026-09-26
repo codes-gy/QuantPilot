@@ -12,7 +12,7 @@ kill switch 저장소(KillSwitchRepository), 일일 손익 저장소(DailyPnlRep
 from app.core.exceptions import KillSwitchEngagedError, RiskLimitExceededError
 from app.core.logging import get_logger
 from app.features.notification.service import NotificationService
-from app.features.risk.ports import DailyPnlRepository, KillSwitchRepository
+from app.features.risk.ports import DailyPnlRepository, KillSwitchAuditLogRepository, KillSwitchRepository
 
 logger = get_logger(__name__)
 
@@ -24,11 +24,13 @@ class RiskGuard:
         notifier: NotificationService | None = None,
         daily_pnl: DailyPnlRepository | None = None,
         daily_loss_limit_krw: float | None = None,
+        audit_log: KillSwitchAuditLogRepository | None = None,
     ) -> None:
         self._kill_switch = kill_switch
         self._notifier = notifier
         self._daily_pnl = daily_pnl
         self._daily_loss_limit_krw = daily_loss_limit_krw
+        self._audit_log = audit_log
 
     async def is_trading_allowed(self) -> bool:
         return not await self._kill_switch.is_engaged()
@@ -38,7 +40,8 @@ class RiskGuard:
         await self._kill_switch.engage()
         if self._notifier is not None:
             await self._notifier.notify("kill_switch_engaged", reason)
-        # TODO: 사유(reason) 감사 로그를 DB에 영구 기록 (지금은 notification으로만 전파됨)
+        if self._audit_log is not None:
+            await self._audit_log.record(reason)
 
     async def release_kill_switch(self) -> None:
         await self._kill_switch.release()

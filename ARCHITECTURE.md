@@ -75,6 +75,7 @@ flowchart LR
 - **비상 정지(kill switch)**: Redis의 `kill_switch:global` 키 하나로 전체 신규 주문을 즉시 차단. 앱 대시보드에 상시 노출되는 버튼 → `POST /risk/kill-switch/engage` → 이후 모든 주문 경로(`RiskGuard.assert_can_trade`)가 이 값을 먼저 확인한다.
 - **손절/포지션 한도**: 전략별 `stop_loss_pct`, `max_position_size`를 `RiskGuard.check_stop_loss` / `check_position_size`에서 체크, 초과 시 `RiskLimitExceededError`로 주문을 거부하고 감사 로그를 남긴다.
 - **일일 손실 한도**: 전략별 손절과는 별개로, 계좌 전체 기준 상위 서킷브레이커. 매도 체결마다 실현손익을 `DailyPnlRepository`(Redis, KST 날짜 기준 자동 리셋)에 누적하고, `DAILY_LOSS_LIMIT_KRW`를 넘으면 `RiskGuard`가 kill switch를 자동 발동한다 — 그 뒤로는 기존 kill switch 경로가 모든 신규 주문을 그대로 차단한다.
+- **Kill switch 감사 로그**: kill switch on/off 상태 자체는 Redis(`KillSwitchRepository`)에 있지만, "언제 왜 발동됐는지"는 별도로 Postgres(`KillSwitchAuditLogRepository`)에 영구 기록한다 — 알림을 놓쳐도 나중에 이력을 되짚어볼 수 있다.
 - **멱등성**: 모든 주문은 `client_order_id`를 미리 발급해 Celery task 재시도 시 중복 주문을 방지한다 (`OrderRequest.client_order_id`, `Order.client_order_id` unique 제약).
 - **자격증명 분리**: `.env`에서 paper/live 앱키·시크릿을 완전히 분리된 변수로 관리해, live 자격증명이 실수로 paper 경로에 쓰이는 것을 원천 차단한다.
 
@@ -129,7 +130,10 @@ QuantPilot/
 ## 8. 다음 단계 후보
 
 - Upbit 실제 REST·WS 연동 구현 (KIS는 체결 확인 폴링까지 완료)
-- Kill switch 발동 사유를 DB에 영구 기록 (현재는 알림 전파만 됨 — 감사 로그 보완 필요)
+- **Alembic 마이그레이션 파일이 아직 하나도 없음** — `env.py`는 모든 모델을 정상적으로 인식하지만,
+  실제 `alembic/versions/`가 비어 있어 스키마가 마이그레이션으로 재현되지 않는다. Postgres에
+  연결 가능한 환경에서 `alembic revision --autogenerate -m "initial schema"`로 베이스라인을
+  한 번 만들어야 한다 (이 세션에서는 로컬에 Postgres를 띄울 수 없어 직접 생성하지 못했다).
 - 전략 엔진 규칙 타입 확장 (RSI, 볼린저밴드 등) 및 백테스트 모듈
 - 알림 채널 확장 (푸시 알림, 이메일)
 - 시계열 데이터 규모가 커지면 TimescaleDB 도입 검토

@@ -70,7 +70,8 @@ DB/Redis 없이도 통과합니다 (RiskGuard/OrderExecutionFacade는 포트 인
 | KIS 실연동 | 인증, 주문, 실시간 시세 WebSocket, 체결 확인 폴링 | ✅ (모의투자 앱키로 실제 검증 필요) |
 | Upbit 실연동 | 인증, 주문, 실시간 시세 WebSocket | ⬜ |
 | 일일 손실 한도 | 전체 계좌 단위 서킷브레이커 (매도 체결마다 실현손익 누적, 한도 초과 시 kill switch 자동 발동) | ✅ |
-| 테스트 | RiskGuard/OrderExecutionFacade/live 모드 안전장치 단위 테스트 (24개) | ✅ |
+| Kill switch 감사 로그 | 발동 사유를 Postgres에 영구 기록 (`GET /api/v1/risk/kill-switch/history`) | ✅ |
+| 테스트 | RiskGuard/OrderExecutionFacade/live 모드 안전장치 단위 테스트 (32개) | ✅ |
 | CI | GitHub Actions — ruff lint + import 스모크 테스트 + pytest (`backend/` 변경 시) | ✅ |
 | Live 모드 안전장치 | `TRADING_MODE=live`인데 기본 시크릿/빈 KIS 자격증명이면 기동 자체를 거부 | ✅ |
 

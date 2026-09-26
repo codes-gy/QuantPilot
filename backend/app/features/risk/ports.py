@@ -7,6 +7,8 @@ guard.py는 수정할 필요가 없다.
 
 from abc import ABC, abstractmethod
 
+from app.features.risk.models import KillSwitchAuditLog
+
 
 class KillSwitchRepository(ABC):
     @abstractmethod
@@ -31,3 +33,15 @@ class DailyPnlRepository(ABC):
 
     @abstractmethod
     async def get_today_realized_pnl(self) -> float: ...
+
+
+class KillSwitchAuditLogRepository(ABC):
+    """kill switch 발동 사유를 영구 기록하는 저장소 (kill switch on/off 상태 자체는
+    KillSwitchRepository/Redis가 담당하고, 이 저장소는 감사 추적 전용이다).
+    """
+
+    @abstractmethod
+    async def record(self, reason: str) -> None: ...
+
+    @abstractmethod
+    async def list_recent(self, limit: int = 50) -> list[KillSwitchAuditLog]: ...

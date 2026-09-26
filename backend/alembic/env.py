@@ -11,6 +11,7 @@ from app.db.base import Base
 # 각 feature의 models.py를 import해야 Base.metadata에 테이블이 등록된다.
 from app.features.account.models import User  # noqa: F401
 from app.features.market_data.models import Candle  # noqa: F401
+from app.features.risk.models import KillSwitchAuditLog  # noqa: F401
 from app.features.strategy.models import Strategy  # noqa: F401
 from app.features.trading.models import Order, Position  # noqa: F401
 
