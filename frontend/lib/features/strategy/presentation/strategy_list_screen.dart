@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../data/strategy_repository.dart';
 import '../domain/strategy.dart';
+import 'strategy_form_screen.dart';
 
 class StrategyListScreen extends ConsumerWidget {
   const StrategyListScreen({super.key});
@@ -23,12 +24,13 @@ class StrategyListScreen extends ConsumerWidget {
                   children: const [
                     Padding(
                       padding: EdgeInsets.all(32),
-                      child: Center(child: Text('등록된 전략이 없어요.')),
+                      child: Center(child: Text('등록된 전략이 없어요.\n오른쪽 아래 [전략 추가]로 만들어 보세요.', textAlign: TextAlign.center)),
                     ),
                   ],
                 )
               : ListView.builder(
                   physics: const AlwaysScrollableScrollPhysics(),
+                  padding: const EdgeInsets.only(bottom: 88), // 전략 추가 버튼에 마지막 항목이 가리지 않도록
                   itemCount: list.length,
                   itemBuilder: (context, i) => _StrategyTile(strategy: list[i]),
                 ),
@@ -36,7 +38,14 @@ class StrategyListScreen extends ConsumerWidget {
           error: (err, _) => Center(child: Text('불러오기 실패: $err')),
         ),
       ),
-      // TODO: 전략 생성/수정 화면으로 이동하는 FloatingActionButton
+      floatingActionButton: FloatingActionButton.extended(
+        key: const ValueKey('add-strategy'),
+        icon: const Icon(Icons.add),
+        label: const Text('전략 추가'),
+        onPressed: () => Navigator.of(context).push(
+          MaterialPageRoute<bool>(builder: (_) => const StrategyFormScreen()),
+        ),
+      ),
     );
   }
 }
@@ -66,7 +75,8 @@ class _StrategyTileState extends ConsumerState<_StrategyTile> {
 
     return ListTile(
       title: Text(s.name),
-      subtitle: Text('${s.symbol} · ${_statusLabel[s.status]}'),
+      subtitle: Text('${s.symbol} · ${_statusLabel[s.status]}\n${s.summary}'),
+      isThreeLine: true,
       trailing: _busy
           ? const SizedBox(width: 24, height: 24, child: CircularProgressIndicator(strokeWidth: 2))
           : Switch(

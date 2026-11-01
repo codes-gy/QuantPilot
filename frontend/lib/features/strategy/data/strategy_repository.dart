@@ -14,6 +14,12 @@ class StrategyRepository {
     return (response.data as List).map((e) => Strategy.fromJson(e as Map<String, dynamic>)).toList();
   }
 
+  /// 새 전략을 등록한다. 서버는 항상 꺼진(paused) 상태로 만든다.
+  Future<Strategy> create(StrategyDraft draft) async {
+    final response = await _api.dio.post('/strategies', data: draft.toJson());
+    return Strategy.fromJson(response.data as Map<String, dynamic>);
+  }
+
   /// 전략을 켠다. 설정이 잘못돼 있으면 서버가 422와 함께 이유(detail)를 돌려준다.
   Future<Strategy> activate(int id) => _setStatus(id, 'activate');
 
