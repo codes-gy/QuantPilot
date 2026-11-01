@@ -5,12 +5,11 @@
      (리스크 재확인 -> 주문 기록 -> BrokerAdapter.place_order -> 결과 반영, 전부 파사드 안에서 처리)
 
 Celery task 자체는 동기 컨텍스트이므로, 매 실행마다 독립된 DB 세션을 열고
-asyncio.run으로 파사드(비동기)를 호출한다 — FastAPI 요청 스코프 세션과는 무관하다.
+run_async(asyncio.run + 루프별 연결 정리)로 파사드(비동기)를 호출한다 — FastAPI 요청 스코프 세션과는 무관하다.
 """
 
-import asyncio
-
 from app.celery_app import celery_app
+from app.core.async_runner import run_async
 from app.core.config import get_settings
 from app.core.exceptions import BrokerAPIError, KillSwitchEngagedError, RiskLimitExceededError
 from app.core.logging import get_logger
@@ -93,7 +92,7 @@ def submit_order_task(
     감사 로그(RiskGuard가 이미 알림을 보낸다)에 맡긴다.
     """
     try:
-        return asyncio.run(
+        return run_async(
             _submit_order(
                 client_order_id=client_order_id,
                 symbol=symbol,
@@ -155,4 +154,4 @@ def poll_pending_order_fills() -> int:
     확인해서 포지션/일일 손실 한도 서킷브레이커에 반영한다 (자세한 배경은
     ARCHITECTURE.md 참고).
     """
-    return asyncio.run(_poll_pending_order_fills())
+    return run_async(_poll_pending_order_fills())
