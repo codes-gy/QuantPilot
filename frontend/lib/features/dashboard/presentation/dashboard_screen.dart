@@ -41,7 +41,7 @@ class DashboardScreen extends ConsumerWidget {
                     )
                   : const SizedBox.shrink(),
               loading: () => const SizedBox.shrink(),
-              error: (_, __) => const SizedBox.shrink(),
+              error: (_, _) => const SizedBox.shrink(),
             ),
             _DailyPnlCard(async: dailyPnlAsync),
             const SizedBox(height: 24),
