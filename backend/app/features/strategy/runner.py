@@ -31,6 +31,7 @@ from app.features.risk.redis_repository import RedisDailyPnlRepository, RedisKil
 from app.features.strategy.engine import MarketSnapshot, Signal, evaluate_entry, evaluate_exit
 from app.features.strategy.models import Strategy
 from app.features.strategy.repository import SqlAlchemyStrategyRepository
+from app.features.strategy.submit_guard import SubmitGuard
 from app.features.trading.repository import SqlAlchemyOrderRepository, SqlAlchemyPositionRepository
 from app.features.trading.tasks import submit_order_task
 
@@ -38,12 +39,8 @@ logger = get_logger(__name__)
 
 REFRESH_INTERVAL_SECONDS = 30
 MAX_PRICE_HISTORY = 200
-# 주문 제출(delay) 후 워커가 주문을 DB에 기록하기 전까지는 has_open_order()로 잡히지 않는다.
-# 코인은 틱이 초당 여러 번 들어오므로 그 사이 같은 신호로 주문이 연달아 나가지 않게,
-# 전략별로 마지막 제출 이후 이 시간 동안은 새 주문을 내지 않는다.
-SUBMIT_COOLDOWN_SECONDS = 60
-
-_last_submitted_at: dict[int, float] = {}
+# 중복 제출/손절 후 즉시 재매수 방지 (규칙은 submit_guard.py 참고).
+_submit_guard = SubmitGuard()
 
 
 async def _load_active_strategies() -> list[Strategy]:
@@ -90,6 +87,7 @@ async def _evaluate_strategy(
     #    (포지션이 이미 있는데 추가 매수하는 피라미딩은 이 엔진에서 아직 지원하지 않음)
     if signal is Signal.HOLD and position is None and strategy.entry_rule:
         candidate = evaluate_entry(strategy.entry_rule, snapshot)
+        _submit_guard.entry_evaluated(strategy.id, candidate)
         if candidate is Signal.BUY:
             # TODO: 지금은 max_position_size 전량을 한 번에 매수하는 단순 사이징이다.
             #       분할 매수/자금 배분 등 정교한 사이징 규칙은 이후 개선 대상.
@@ -105,10 +103,9 @@ async def _evaluate_strategy(
     if signal is Signal.HOLD:
         return
 
-    # 중복 주문 방지: 직전 제출 직후이거나, 이 종목에 아직 체결/취소되지 않은 주문이 있으면
-    # 이번 신호는 건너뛴다 (체결이 확정돼 포지션이 갱신된 뒤 다음 틱에서 다시 판단).
-    last = _last_submitted_at.get(strategy.id)
-    if last is not None and time.monotonic() - last < SUBMIT_COOLDOWN_SECONDS:
+    # 중복 주문 방지: 방향별 쿨다운/재진입 대기 중이거나, 이 종목에 아직 체결/취소되지 않은
+    # 주문이 있으면 이번 신호는 건너뛴다 (체결이 확정돼 포지션이 갱신된 뒤 다음 틱에서 다시 판단).
+    if not _submit_guard.allows(strategy.id, signal, time.monotonic()):
         return
     if await _has_open_order(strategy.symbol):
         return
@@ -122,7 +119,7 @@ async def _evaluate_strategy(
         asset_class=strategy.asset_class,
         strategy_id=strategy.id,
     )
-    _last_submitted_at[strategy.id] = time.monotonic()
+    _submit_guard.record(strategy.id, signal, time.monotonic())
     logger.info("submitted %s order for strategy %s (%s)", signal.value, strategy.id, strategy.symbol)
 
 
