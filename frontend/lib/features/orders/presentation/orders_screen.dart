@@ -72,7 +72,7 @@ class _OrderTile extends StatelessWidget {
 
     return ListTile(
       leading: CircleAvatar(
-        backgroundColor: sideColor.withOpacity(0.15),
+        backgroundColor: sideColor.withValues(alpha: 0.15),
         child: Text(sideLabel, style: TextStyle(color: sideColor, fontSize: 12, fontWeight: FontWeight.bold)),
       ),
       title: Text(order.symbol),

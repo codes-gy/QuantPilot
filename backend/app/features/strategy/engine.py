@@ -44,6 +44,23 @@ _RULE_HANDLERS: dict[str, RuleHandler] = {
 }
 
 
+def validate_rule(rule: dict) -> None:
+    """전략을 켜기 전에 규칙이 엔진에서 실제로 평가 가능한지 확인한다. 잘못된 규칙으로
+    켜지면 러너가 틱마다 예외를 내며 그 전략을 평가하지 못하므로 미리 막는다.
+    """
+    rule_type = rule.get("type")
+    if rule_type not in _RULE_HANDLERS:
+        raise ValueError(f"지원하지 않는 규칙 타입: {rule_type!r} (가능: {', '.join(_RULE_HANDLERS)})")
+    if rule_type == "ma_cross":
+        fast, slow = rule.get("fast"), rule.get("slow")
+        if not (isinstance(fast, int) and isinstance(slow, int) and 0 < fast < slow):
+            raise ValueError("ma_cross는 0 < fast < slow 인 정수 fast/slow가 필요합니다.")
+    if rule_type == "price_threshold":
+        keys = [k for k in ("below", "above") if k in rule]
+        if len(keys) != 1 or not isinstance(rule[keys[0]], (int, float)) or rule[keys[0]] <= 0:
+            raise ValueError("price_threshold는 양수 below 또는 above 중 하나만 가져야 합니다.")
+
+
 def evaluate_entry(entry_rule: dict, snapshot: MarketSnapshot) -> Signal:
     handler = _RULE_HANDLERS.get(entry_rule["type"])
     if handler is None:

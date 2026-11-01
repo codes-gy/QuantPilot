@@ -18,8 +18,20 @@ class SqlAlchemyStrategyRepository(StrategyRepository):
         return strategy
 
     async def list_all(self) -> list[Strategy]:
-        result = await self._db.execute(select(Strategy))
+        result = await self._db.execute(select(Strategy).order_by(Strategy.id))
         return list(result.scalars().all())
+
+    async def get(self, strategy_id: int) -> Strategy | None:
+        return await self._db.get(Strategy, strategy_id)
+
+    async def update(self, strategy: Strategy) -> Strategy:
+        await self._db.commit()
+        await self._db.refresh(strategy)
+        return strategy
+
+    async def delete(self, strategy: Strategy) -> None:
+        await self._db.delete(strategy)
+        await self._db.commit()
 
     async def list_active(self) -> list[Strategy]:
         result = await self._db.execute(

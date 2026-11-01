@@ -17,6 +17,7 @@ websockets==13.0
 
 pyjwt==2.9.0
 passlib[bcrypt]==1.7.4
+bcrypt==4.0.1  # passlib 1.7.4는 bcrypt 4.1+와 호환되지 않음 (5.x에서는 해시 생성 자체가 실패)
 
 pytest==8.3.3
 pytest-asyncio==0.24.0

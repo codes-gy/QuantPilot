@@ -60,18 +60,65 @@ class _RootShellState extends State<RootShell> {
     SettingsScreen(),
   ];
 
+  static const _destinations = [
+    (icon: Icons.dashboard, label: '대시보드'),
+    (icon: Icons.rule, label: '전략'),
+    (icon: Icons.receipt_long, label: '주문'),
+    (icon: Icons.settings, label: '설정'),
+  ];
+
+  /// 이 폭 이상(PC 브라우저/태블릿 가로)이면 하단 탭 대신 왼쪽 세로 메뉴를 쓴다.
+  static const _wideBreakpoint = 840.0;
+
+  /// 넓은 화면에서 목록/카드가 끝없이 늘어나 읽기 어려워지지 않도록 본문 폭을 제한한다.
+  static const _maxContentWidth = 1100.0;
+
+  void _select(int i) => setState(() => _index = i);
+
   @override
   Widget build(BuildContext context) {
+    final content = IndexedStack(index: _index, children: _tabs);
+    final isWide = MediaQuery.sizeOf(context).width >= _wideBreakpoint;
+
+    if (!isWide) {
+      return Scaffold(
+        body: content,
+        bottomNavigationBar: NavigationBar(
+          selectedIndex: _index,
+          onDestinationSelected: _select,
+          destinations: [
+            for (final d in _destinations) NavigationDestination(icon: Icon(d.icon), label: d.label),
+          ],
+        ),
+      );
+    }
+
     return Scaffold(
-      body: IndexedStack(index: _index, children: _tabs),
-      bottomNavigationBar: NavigationBar(
-        selectedIndex: _index,
-        onDestinationSelected: (i) => setState(() => _index = i),
-        destinations: const [
-          NavigationDestination(icon: Icon(Icons.dashboard), label: '대시보드'),
-          NavigationDestination(icon: Icon(Icons.rule), label: '전략'),
-          NavigationDestination(icon: Icon(Icons.receipt_long), label: '주문'),
-          NavigationDestination(icon: Icon(Icons.settings), label: '설정'),
+      body: Row(
+        children: [
+          NavigationRail(
+            selectedIndex: _index,
+            onDestinationSelected: _select,
+            labelType: NavigationRailLabelType.all,
+            leading: Padding(
+              padding: const EdgeInsets.symmetric(vertical: 16),
+              child: Icon(Icons.auto_graph, color: Theme.of(context).colorScheme.primary, size: 32),
+            ),
+            destinations: [
+              for (final d in _destinations)
+                NavigationRailDestination(icon: Icon(d.icon), label: Text(d.label)),
+            ],
+          ),
+          const VerticalDivider(width: 1),
+          Expanded(
+            child: Align(
+              alignment: Alignment.topCenter,
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: _maxContentWidth),
+                child: content,
+              ),
+            ),
+          ),
         ],
       ),
     );

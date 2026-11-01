@@ -44,6 +44,10 @@ class Settings(BaseSettings):
     upbit_access_key: str = ""
     upbit_secret_key: str = ""
 
+    # 브라우저(Flutter 웹)에서 API를 호출할 수 있는 출처. 기본값은 이 PC(localhost)의
+    # 아무 포트나 허용 — 외부에 배포할 때는 실제 웹 주소만 허용하도록 바꿀 것.
+    cors_allow_origin_regex: str = r"https?://(localhost|127\.0\.0\.1)(:\d+)?"
+
     @property
     def is_live_trading(self) -> bool:
         return self.trading_mode is TradingMode.LIVE

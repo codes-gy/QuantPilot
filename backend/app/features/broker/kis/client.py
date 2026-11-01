@@ -16,9 +16,16 @@ from zoneinfo import ZoneInfo
 import httpx
 
 from app.core.config import get_settings
-from app.core.exceptions import BrokerAPIError
+from app.core.exceptions import BrokerAPIError, SymbolNotFoundError
 from app.core.logging import get_logger
-from app.features.broker.base import AssetClass, Balance, BrokerAdapter, OrderRequest, OrderResult
+from app.features.broker.base import (
+    AssetClass,
+    Balance,
+    BrokerAdapter,
+    OrderRequest,
+    OrderResult,
+    Quote,
+)
 from app.features.broker.kis.auth import KISAuth, KISCredentials
 
 logger = get_logger(__name__)
@@ -232,3 +239,47 @@ class KISBrokerAdapter(BrokerAdapter):
         }
         cash = float(data["output2"][0]["dnca_tot_amt"]) if data.get("output2") else 0.0
         return Balance(cash=cash, positions=positions)
+
+    async def get_quote(self, symbol: str) -> Quote:
+        """주식현재가 시세(FHKST01010100) + 종목명(상품기본조회 CTPF1002R).
+
+        KIS는 없는 종목코드에도 rt_cd=0(정상)으로 응답하고 현재가만 0으로 돌려주므로,
+        현재가가 0 이하면 없는 종목으로 본다. 시세 조회 TR은 모의/실전 구분 없이 같다.
+        """
+        response = await self._http.get(
+            "/uapi/domestic-stock/v1/quotations/inquire-price",
+            headers=await self._headers("FHKST01010100"),
+            params={"FID_COND_MRKT_DIV_CODE": "J", "FID_INPUT_ISCD": symbol},
+        )
+        data = response.json()
+        if response.status_code != 200 or data.get("rt_cd") != "0":
+            raise BrokerAPIError(f"KIS inquire-price failed: {data.get('msg1', response.text)}")
+
+        output = data.get("output") or {}
+        price = float(output.get("stck_prpr") or 0)
+        if price <= 0:
+            raise SymbolNotFoundError(f"종목코드를 찾을 수 없어요: {symbol}")
+        change_rate = output.get("prdy_ctrt")
+
+        return Quote(
+            symbol=symbol,
+            price=price,
+            name=await self._stock_name(symbol),
+            change_rate=float(change_rate) if change_rate not in (None, "") else None,
+        )
+
+    async def _stock_name(self, symbol: str) -> str | None:
+        """종목명은 확인용 부가 정보라, 조회에 실패해도 현재가는 그대로 보여준다."""
+        try:
+            response = await self._http.get(
+                "/uapi/domestic-stock/v1/quotations/search-stock-info",
+                headers=await self._headers("CTPF1002R"),
+                params={"PRDT_TYPE_CD": "300", "PDNO": symbol},
+            )
+            data = response.json()
+        except (httpx.HTTPError, ValueError):
+            logger.warning("KIS stock name lookup failed for %s", symbol)
+            return None
+        if data.get("rt_cd") != "0":
+            return None
+        return (data.get("output") or {}).get("prdt_abrv_name") or None

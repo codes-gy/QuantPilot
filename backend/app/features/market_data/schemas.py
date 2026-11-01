@@ -7,6 +7,19 @@ class PriceOut(BaseModel):
     timestamp: float
 
 
+class SymbolOut(BaseModel):
+    symbol: str
+    name: str
+    market: str
+
+
+class QuoteOut(BaseModel):
+    symbol: str
+    name: str | None
+    price: float
+    change_rate: float | None
+
+
 class CandleOut(BaseModel):
     symbol: str
     interval: str

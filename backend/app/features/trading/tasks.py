@@ -5,12 +5,11 @@
      (리스크 재확인 -> 주문 기록 -> BrokerAdapter.place_order -> 결과 반영, 전부 파사드 안에서 처리)
 
 Celery task 자체는 동기 컨텍스트이므로, 매 실행마다 독립된 DB 세션을 열고
-asyncio.run으로 파사드(비동기)를 호출한다 — FastAPI 요청 스코프 세션과는 무관하다.
+run_async(asyncio.run + 루프별 연결 정리)로 파사드(비동기)를 호출한다 — FastAPI 요청 스코프 세션과는 무관하다.
 """
 
-import asyncio
-
 from app.celery_app import celery_app
+from app.core.async_runner import run_async
 from app.core.config import get_settings
 from app.core.exceptions import BrokerAPIError, KillSwitchEngagedError, RiskLimitExceededError
 from app.core.logging import get_logger
@@ -93,7 +92,7 @@ def submit_order_task(
     감사 로그(RiskGuard가 이미 알림을 보낸다)에 맡긴다.
     """
     try:
-        return asyncio.run(
+        return run_async(
             _submit_order(
                 client_order_id=client_order_id,
                 symbol=symbol,
@@ -122,24 +121,30 @@ async def _poll_pending_order_fills() -> int:
     checked = 0
     async with AsyncSessionLocal() as db:
         orders_repo = SqlAlchemyOrderRepository(db)
-        facade = OrderExecutionFacade(
-            orders=orders_repo,
-            positions=SqlAlchemyPositionRepository(db),
-            risk_guard=RiskGuard(
-                kill_switch=RedisKillSwitchRepository(),
-                notifier=get_notification_service(),
-                daily_pnl=RedisDailyPnlRepository(),
-                daily_loss_limit_krw=settings.daily_loss_limit_krw,
-                audit_log=SqlAlchemyKillSwitchAuditLogRepository(db),
-            ),
-            broker=get_broker_adapter(AssetClass.KR_STOCK),  # TODO: Upbit도 폴링이 필요해지면 asset_class별로 분기
-        )
+        facades: dict[str, OrderExecutionFacade] = {}
+
+        def facade_for(asset_class: str) -> OrderExecutionFacade:
+            # 주문마다 자기 자산군(KIS 주식 / Upbit 코인) 브로커로 체결을 확인해야 한다.
+            if asset_class not in facades:
+                facades[asset_class] = OrderExecutionFacade(
+                    orders=orders_repo,
+                    positions=SqlAlchemyPositionRepository(db),
+                    risk_guard=RiskGuard(
+                        kill_switch=RedisKillSwitchRepository(),
+                        notifier=get_notification_service(),
+                        daily_pnl=RedisDailyPnlRepository(),
+                        daily_loss_limit_krw=settings.daily_loss_limit_krw,
+                        audit_log=SqlAlchemyKillSwitchAuditLogRepository(db),
+                    ),
+                    broker=get_broker_adapter(AssetClass(asset_class)),
+                )
+            return facades[asset_class]
 
         pending_orders = await orders_repo.list_pending()
         for order in pending_orders:
             checked += 1
             try:
-                await facade.poll_and_apply_fill(order)
+                await facade_for(order.asset_class).poll_and_apply_fill(order)
             except BrokerAPIError:
                 logger.warning(
                     "failed to poll fill status for order %s, will retry next cycle", order.client_order_id
@@ -155,4 +160,4 @@ def poll_pending_order_fills() -> int:
     확인해서 포지션/일일 손실 한도 서킷브레이커에 반영한다 (자세한 배경은
     ARCHITECTURE.md 참고).
     """
-    return asyncio.run(_poll_pending_order_fills())
+    return run_async(_poll_pending_order_fills())

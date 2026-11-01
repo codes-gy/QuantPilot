@@ -27,3 +27,9 @@ frontend/android/.gradle/
 
 # OS
 .DS_Store
+
+# 로컬 로그인 비밀번호 (커밋 금지)
+.quantpilot-login.txt
+
+# celery-beat 실행 시 생기는 스케줄 상태 파일
+backend/celerybeat-schedule

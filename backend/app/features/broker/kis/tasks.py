@@ -1,6 +1,5 @@
-import asyncio
-
 from app.celery_app import celery_app
+from app.core.async_runner import run_async
 from app.core.config import get_settings
 from app.core.exceptions import BrokerAPIError
 from app.core.logging import get_logger
@@ -24,6 +23,6 @@ def refresh_kis_token() -> None:
             continue  # 해당 모드 자격증명 미설정 시 skip
 
         try:
-            asyncio.run(KISAuth(creds, mode_key).refresh_token())
+            run_async(KISAuth(creds, mode_key).refresh_token())
         except BrokerAPIError:
             logger.exception("KIS token refresh failed (%s)", mode_key)

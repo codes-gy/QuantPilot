@@ -14,5 +14,9 @@ class BrokerAPIError(QuantPilotError):
     """증권사 API 호출 실패 (인증, 레이트리밋, 주문 거부 등)."""
 
 
+class SymbolNotFoundError(QuantPilotError):
+    """증권사/거래소에 없는 종목코드."""
+
+
 class StrategyEvaluationError(QuantPilotError):
     """전략 조건 평가 중 오류."""
