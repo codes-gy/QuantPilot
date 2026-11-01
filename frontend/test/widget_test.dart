@@ -15,6 +15,15 @@ import 'package:quantpilot/main.dart';
 class _FakeStrategyRepository implements StrategyRepository {
   @override
   Future<List<Strategy>> fetchAll() async => const [];
+
+  @override
+  Future<Strategy> activate(int id) => throw UnimplementedError();
+
+  @override
+  Future<Strategy> pause(int id) => throw UnimplementedError();
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
 }
 
 /// 대시보드가 실제 REST 호출(kill switch 상태/오늘 손익/포지션)을 하지 않도록 대체한다 —
