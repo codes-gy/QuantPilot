@@ -30,9 +30,16 @@ import httpx
 import jwt
 
 from app.core.config import get_settings
-from app.core.exceptions import BrokerAPIError, RiskLimitExceededError
+from app.core.exceptions import BrokerAPIError, RiskLimitExceededError, SymbolNotFoundError
 from app.core.logging import get_logger
-from app.features.broker.base import AssetClass, Balance, BrokerAdapter, OrderRequest, OrderResult
+from app.features.broker.base import (
+    AssetClass,
+    Balance,
+    BrokerAdapter,
+    OrderRequest,
+    OrderResult,
+    Quote,
+)
 
 logger = get_logger(__name__)
 
@@ -94,6 +101,31 @@ class UpbitBrokerAdapter(BrokerAdapter):
         if not data:
             raise BrokerAPIError(f"Upbit ticker returned no data for {market}")
         return float(data[0]["trade_price"])
+
+    async def get_quote(self, symbol: str) -> Quote:
+        """공개 ticker + 마켓 목록(한글 이름). 인증이 필요 없어 paper 모드에서도 쓸 수 있다."""
+        response = await self._http.get("/v1/ticker", params={"markets": symbol})
+        if response.status_code == 404:
+            raise SymbolNotFoundError(f"업비트에 없는 마켓이에요: {symbol}")
+        data = self._raise_for_error(response, "ticker")
+        if not data:
+            raise SymbolNotFoundError(f"업비트에 없는 마켓이에요: {symbol}")
+        ticker = data[0]
+        rate = ticker.get("signed_change_rate")
+        return Quote(
+            symbol=symbol,
+            price=float(ticker["trade_price"]),
+            name=await self._market_name(symbol),
+            change_rate=round(float(rate) * 100, 2) if rate is not None else None,
+        )
+
+    async def _market_name(self, symbol: str) -> str | None:
+        try:
+            response = await self._http.get("/v1/market/all", params={"isDetails": "false"})
+            markets = response.json() if response.status_code == 200 else []
+        except (httpx.HTTPError, ValueError):
+            return None
+        return next((m.get("korean_name") for m in markets if m.get("market") == symbol), None)
 
     async def place_order(self, order: OrderRequest) -> OrderResult:
         self._require_live()

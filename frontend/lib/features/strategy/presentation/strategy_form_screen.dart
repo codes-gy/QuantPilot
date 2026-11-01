@@ -3,6 +3,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../market_watch/data/market_watch_repository.dart';
+import '../../market_watch/domain/quote.dart';
 import '../data/strategy_repository.dart';
 import '../domain/strategy.dart';
 
@@ -36,6 +38,11 @@ class _StrategyFormScreenState extends ConsumerState<StrategyFormScreen> {
 
   AssetClass _assetClass = AssetClass.krStock;
   bool _submitting = false;
+
+  // 현재가 조회 상태. 종목이나 거래소를 바꾸면 이전 결과는 지운다.
+  Quote? _quote;
+  String? _quoteError;
+  bool _quoteLoading = false;
 
   bool get _isEdit => widget.initial != null;
 
@@ -121,6 +128,7 @@ class _StrategyFormScreenState extends ConsumerState<StrategyFormScreen> {
               selected: {_assetClass},
               onSelectionChanged: (s) => setState(() {
                 _assetClass = s.first;
+                _clearQuote();
                 _quantity.text = _isCrypto ? '' : '1';
                 _formKey.currentState?.validate();
               }),
@@ -133,8 +141,16 @@ class _StrategyFormScreenState extends ConsumerState<StrategyFormScreen> {
                 labelText: '종목',
                 hintText: _isCrypto ? '예: KRW-BTC' : '예: 005930 (6자리 종목코드)',
                 border: const OutlineInputBorder(),
+                suffixIcon: IconButton(
+                  key: const ValueKey('lookup-quote'),
+                  tooltip: '현재가 조회',
+                  icon: const Icon(Icons.search),
+                  onPressed: _symbolLooksValid && !_quoteLoading ? _lookupQuote : null,
+                ),
               ),
               textCapitalization: TextCapitalization.characters,
+              onChanged: (_) => setState(_clearQuote),
+              onFieldSubmitted: (_) => _lookupQuote(),
               validator: (_) {
                 final s = _normalizedSymbol;
                 if (s.isEmpty) return '종목을 입력하세요.';
@@ -146,6 +162,13 @@ class _StrategyFormScreenState extends ConsumerState<StrategyFormScreen> {
                 }
                 return null;
               },
+            ),
+            _QuotePanel(
+              quote: _quote,
+              error: _quoteError,
+              loading: _quoteLoading,
+              onUseBuy: (pct) => _fillFromQuote(_buyBelow, pct, roundUp: false),
+              onUseSell: (pct) => _fillFromQuote(_sellAbove, pct, roundUp: true),
             ),
             const SizedBox(height: 16),
             _priceField(
@@ -246,6 +269,47 @@ class _StrategyFormScreenState extends ConsumerState<StrategyFormScreen> {
     );
   }
 
+  bool get _symbolLooksValid => _isCrypto
+      ? RegExp(r'^KRW-[A-Z0-9]+$').hasMatch(_normalizedSymbol)
+      : RegExp(r'^\d{6}$').hasMatch(_normalizedSymbol);
+
+  void _clearQuote() {
+    _quote = null;
+    _quoteError = null;
+  }
+
+  Future<void> _lookupQuote() async {
+    if (!_symbolLooksValid) {
+      _formKey.currentState?.validate();
+      return;
+    }
+    final symbol = _normalizedSymbol;
+    final assetClass = _assetClass;
+    setState(() {
+      _clearQuote();
+      _quoteLoading = true;
+    });
+    try {
+      final quote = await ref.read(marketWatchRepositoryProvider).fetchQuote(assetClass.apiValue, symbol);
+      // 조회하는 사이 종목/거래소를 바꿨으면 결과를 버린다.
+      if (!mounted || symbol != _normalizedSymbol || assetClass != _assetClass) return;
+      setState(() => _quote = quote);
+    } on DioException catch (e) {
+      final detail = e.response?.data is Map ? (e.response!.data as Map)['detail'] : null;
+      if (mounted) setState(() => _quoteError = '${detail ?? '현재가를 불러오지 못했어요.'}');
+    } finally {
+      if (mounted) setState(() => _quoteLoading = false);
+    }
+  }
+
+  /// 현재가 대비 pct(%)만큼 떨어진/오른 가격을 입력칸에 채운다. 매수 기준은 내림, 익절 기준은
+  /// 올림으로 반올림해 "현재가 -3%"보다 더 비싸게 사거나 "+5%"보다 싸게 팔지 않게 한다.
+  void _fillFromQuote(TextEditingController target, double pct, {required bool roundUp}) {
+    final quote = _quote;
+    if (quote == null) return;
+    target.text = _plain(roundQuotePrice(quote.price * (1 + pct / 100), roundUp: roundUp));
+  }
+
   Widget _priceField({
     required String key,
     required TextEditingController controller,
@@ -302,5 +366,95 @@ class _StrategyFormScreenState extends ConsumerState<StrategyFormScreen> {
     } finally {
       if (mounted) setState(() => _submitting = false);
     }
+  }
+}
+
+/// 화면에 넣을 가격 단위: 100원 이상은 원 단위, 그보다 싼 코인은 소수점 4자리.
+double roundQuotePrice(double value, {required bool roundUp}) {
+  final scale = value >= 100 ? 1.0 : 10000.0;
+  final scaled = value * scale;
+  return (roundUp ? scaled.ceilToDouble() : scaled.floorToDouble()) / scale;
+}
+
+class _QuotePanel extends StatelessWidget {
+  const _QuotePanel({
+    required this.quote,
+    required this.error,
+    required this.loading,
+    required this.onUseBuy,
+    required this.onUseSell,
+  });
+
+  final Quote? quote;
+  final String? error;
+  final bool loading;
+  final void Function(double pct) onUseBuy;
+  final void Function(double pct) onUseSell;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    if (loading) {
+      return const Padding(
+        padding: EdgeInsets.only(top: 12),
+        child: LinearProgressIndicator(),
+      );
+    }
+    if (error != null) {
+      return Padding(
+        padding: const EdgeInsets.only(top: 8, left: 12),
+        child: Text(error!, key: const ValueKey('quote-error'), style: TextStyle(color: theme.colorScheme.error)),
+      );
+    }
+    final q = quote;
+    if (q == null) return const SizedBox.shrink();
+
+    final rate = q.changeRate;
+    final rateColor = rate == null || rate == 0
+        ? theme.colorScheme.onSurfaceVariant
+        : (rate > 0 ? Colors.red : Colors.blue); // 국내 관례: 상승 빨강, 하락 파랑
+    final rateText = rate == null ? '' : ' (${rate > 0 ? '+' : ''}${rate.toStringAsFixed(2)}%)';
+
+    return Card(
+      margin: const EdgeInsets.only(top: 12),
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(q.name ?? q.symbol, key: const ValueKey('quote-name'), style: theme.textTheme.titleMedium),
+            const SizedBox(height: 4),
+            Text.rich(
+              key: const ValueKey('quote-price'),
+              TextSpan(children: [
+                TextSpan(text: '현재가 ${formatKrw(q.price)}원', style: theme.textTheme.titleLarge),
+                TextSpan(text: rateText, style: TextStyle(color: rateColor)),
+              ]),
+            ),
+            const SizedBox(height: 8),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                for (final pct in const [-1.0, -3.0, -5.0])
+                  ActionChip(
+                    key: ValueKey('use-buy-${pct.toInt()}'),
+                    avatar: const Icon(Icons.south, size: 16),
+                    label: Text('매수 ${pct.toInt()}%'),
+                    onPressed: () => onUseBuy(pct),
+                  ),
+                for (final pct in const [3.0, 5.0, 10.0])
+                  ActionChip(
+                    key: ValueKey('use-sell-${pct.toInt()}'),
+                    avatar: const Icon(Icons.north, size: 16),
+                    label: Text('익절 +${pct.toInt()}%'),
+                    onPressed: () => onUseSell(pct),
+                  ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
   }
 }

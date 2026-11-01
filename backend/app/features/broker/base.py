@@ -45,6 +45,16 @@ class OrderResult:
 
 
 @dataclass(frozen=True)
+class Quote:
+    """종목 현재가 스냅샷 (전략 등록 화면에서 가격을 정할 때 참고용)."""
+
+    symbol: str
+    price: float
+    name: str | None = None  # 종목명 — 종목코드를 잘못 넣었는지 사용자가 확인할 수 있게
+    change_rate: float | None = None  # 전일 대비 등락률(%) 예: -4.96
+
+
+@dataclass(frozen=True)
 class Balance:
     cash: float
     positions: dict[str, float]  # symbol -> quantity
@@ -63,6 +73,12 @@ class BrokerAdapter(ABC):
 
     @abstractmethod
     async def get_balance(self) -> Balance: ...
+
+    async def get_quote(self, symbol: str) -> Quote:
+        """현재가 조회. 없는 종목이면 SymbolNotFoundError. 주문과 무관한 조회라 추상 메서드로
+        강제하지 않는다 (테스트용 가짜 브로커 등은 구현하지 않아도 된다).
+        """
+        raise NotImplementedError
 
     @abstractmethod
     async def get_order_fill_status(self, broker_order_id: str) -> OrderResult:

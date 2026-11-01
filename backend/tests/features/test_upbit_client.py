@@ -12,7 +12,7 @@ import httpx
 import jwt
 import pytest
 
-from app.core.exceptions import BrokerAPIError, RiskLimitExceededError
+from app.core.exceptions import BrokerAPIError, RiskLimitExceededError, SymbolNotFoundError
 from app.features.broker.base import OrderRequest
 from app.features.broker.upbit.client import UPBIT_BASE_URL, UpbitBrokerAdapter, _fmt_number
 from app.features.broker.upbit.ws_client import UpbitMarketDataAdapter
@@ -241,3 +241,33 @@ def test_ws_ignores_status_and_raises_on_error():
     assert UpbitMarketDataAdapter.parse_message(b'{"status":"UP"}') is None
     with pytest.raises(BrokerAPIError):
         UpbitMarketDataAdapter.parse_message(b'{"error":{"name":"INVALID_PARAM"}}')
+
+
+async def test_quote_returns_price_name_and_change_rate():
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/v1/ticker":
+            assert "Authorization" not in request.headers  # 공개 API
+            return httpx.Response(200, json=[{"trade_price": 104749000.0, "signed_change_rate": -0.0123}])
+        return httpx.Response(200, json=[{"market": "KRW-BTC", "korean_name": "비트코인"}])
+
+    quote = await _adapter(handler, live=False).get_quote("KRW-BTC")  # paper 모드에서도 조회 가능
+    assert (quote.symbol, quote.price, quote.name, quote.change_rate) == ("KRW-BTC", 104749000.0, "비트코인", -1.23)
+
+
+async def test_quote_unknown_market_raises_not_found():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(404, json={"error": {"name": "404", "message": "Code not found"}})
+
+    with pytest.raises(SymbolNotFoundError):
+        await _adapter(handler).get_quote("KRW-NOPE")
+
+
+async def test_quote_still_returns_price_when_name_lookup_fails():
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/v1/ticker":
+            return httpx.Response(200, json=[{"trade_price": 3048000.0, "signed_change_rate": 0.01}])
+        return httpx.Response(500, text="oops")
+
+    quote = await _adapter(handler).get_quote("KRW-ETH")
+    assert quote.price == 3048000.0
+    assert quote.name is None

@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/di/providers.dart';
 import '../../../core/network/api_client.dart';
 import '../domain/price_tick.dart';
+import '../domain/quote.dart';
 
 class MarketWatchRepository {
   MarketWatchRepository(this._api);
@@ -12,6 +13,13 @@ class MarketWatchRepository {
   Future<PriceTick> fetchLatestPrice(String assetClass, String symbol) async {
     final response = await _api.dio.get('/market-data/$assetClass/$symbol/price');
     return PriceTick.fromJson(response.data as Map<String, dynamic>);
+  }
+
+  /// 증권사/거래소에 직접 현재가와 종목명을 조회한다. 시세 캐시(fetchLatestPrice)는 켜진
+  /// 전략의 종목만 들어 있어서, 전략을 등록하기 전에는 이걸 쓴다. 없는 종목이면 404.
+  Future<Quote> fetchQuote(String assetClass, String symbol) async {
+    final response = await _api.dio.get('/market-data/$assetClass/$symbol/quote');
+    return Quote.fromJson(response.data as Map<String, dynamic>);
   }
 }
 
