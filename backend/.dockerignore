@@ -1,0 +1,11 @@
+# 이미지에 넣을 필요 없는 로컬 산출물 (이미지 크기·빌드 시간 절약)
+**/__pycache__/
+**/*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.venv/
+venv/
+celerybeat-schedule*
+tests/
+.env
