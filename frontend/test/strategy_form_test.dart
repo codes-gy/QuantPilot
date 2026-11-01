@@ -2,9 +2,12 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 
+import 'package:quantpilot/features/market_watch/data/market_watch_repository.dart';
 import 'package:quantpilot/features/strategy/data/strategy_repository.dart';
 import 'package:quantpilot/features/strategy/domain/strategy.dart';
 import 'package:quantpilot/features/strategy/presentation/strategy_form_screen.dart';
+
+import 'support/fake_market_repository.dart';
 
 class _CapturingRepository implements StrategyRepository {
   final created = <StrategyDraft>[];
@@ -28,7 +31,10 @@ Future<void> _open(WidgetTester tester, StrategyRepository repo) async {
   addTearDown(tester.view.reset);
   await tester.pumpWidget(
     ProviderScope(
-      overrides: [strategyRepositoryProvider.overrideWithValue(repo)],
+      overrides: [
+        strategyRepositoryProvider.overrideWithValue(repo),
+        marketWatchRepositoryProvider.overrideWithValue(FakeMarketRepository()),
+      ],
       child: const MaterialApp(home: StrategyFormScreen()),
     ),
   );
@@ -47,7 +53,7 @@ void main() {
     final repo = _CapturingRepository();
     await _open(tester, repo);
 
-    await _enter(tester, 'field-symbol', '005930');
+    await searchAndSelect(tester, '삼성', '005930');
     await _enter(tester, 'field-buy', '7,000');
     await _enter(tester, 'field-sell', '7500');
     await tester.pump();
@@ -57,7 +63,7 @@ void main() {
 
     expect(repo.created, hasLength(1));
     expect(repo.created.single.toJson(), {
-      'name': '005930 가격 전략',
+      'name': '삼성전자 가격 전략', // 이름을 비우면 선택한 종목명으로
       'asset_class': 'kr_stock',
       'symbol': '005930',
       'entry_rule': {'type': 'price_threshold', 'below': 7000.0},
@@ -71,14 +77,14 @@ void main() {
     final repo = _CapturingRepository();
     await _open(tester, repo);
 
-    await _enter(tester, 'field-symbol', 'samsung');
+    // 종목을 고르지 않은 채 등록
     await _enter(tester, 'field-buy', '7000');
     await _enter(tester, 'field-sell', '6000');
     await _enter(tester, 'field-stoploss', '150');
     await _submit(tester);
 
     expect(repo.created, isEmpty);
-    expect(find.text('6자리 숫자 종목코드를 입력하세요.'), findsOneWidget);
+    expect(find.text('종목을 검색해서 목록에서 선택하세요.'), findsOneWidget);
     expect(find.text('익절 가격은 매수 가격보다 높아야 해요.'), findsOneWidget);
     expect(find.text('0보다 크고 100보다 작은 값을 입력하세요.'), findsOneWidget);
   });
@@ -89,7 +95,7 @@ void main() {
 
     await tester.tap(find.text('코인 (업비트)'));
     await tester.pumpAndSettle();
-    await _enter(tester, 'field-symbol', 'krw-btc');
+    await searchAndSelect(tester, 'btc', 'KRW-BTC');
     await _enter(tester, 'field-buy', '100000000');
     await _enter(tester, 'field-quantity', '0.00001'); // 1,000원어치
     await _submit(tester);

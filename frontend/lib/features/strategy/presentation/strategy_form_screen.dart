@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -5,6 +7,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../market_watch/data/market_watch_repository.dart';
 import '../../market_watch/domain/quote.dart';
+import '../../market_watch/domain/symbol_info.dart';
 import '../data/strategy_repository.dart';
 import '../domain/strategy.dart';
 
@@ -30,7 +33,9 @@ class StrategyFormScreen extends ConsumerStatefulWidget {
 class _StrategyFormScreenState extends ConsumerState<StrategyFormScreen> {
   final _formKey = GlobalKey<FormState>();
   final _name = TextEditingController();
+  /// 선택된 종목 코드 (화면에는 직접 보이지 않고, 검색칸에는 "종목명 (코드)"가 보인다).
   final _symbol = TextEditingController();
+  final _symbolQuery = TextEditingController();
   final _buyBelow = TextEditingController();
   final _sellAbove = TextEditingController();
   final _quantity = TextEditingController(text: '1');
@@ -38,6 +43,14 @@ class _StrategyFormScreenState extends ConsumerState<StrategyFormScreen> {
 
   AssetClass _assetClass = AssetClass.krStock;
   bool _submitting = false;
+
+  // 종목 검색 상태. 사용자가 목록에서 고른 종목만 등록할 수 있다 (코드 오타 방지).
+  SymbolInfo? _selected;
+  List<SymbolInfo> _results = const [];
+  bool _searching = false;
+  String? _searchError;
+  Timer? _searchDebounce;
+  int _searchSeq = 0; // 늦게 도착한 이전 검색 결과를 버리기 위한 순번
 
   // 현재가 조회 상태. 종목이나 거래소를 바꾸면 이전 결과는 지운다.
   Quote? _quote;
@@ -54,6 +67,10 @@ class _StrategyFormScreenState extends ConsumerState<StrategyFormScreen> {
       _assetClass = initial.assetClass;
       _name.text = initial.name;
       _symbol.text = initial.symbol;
+      // 수정 화면: 종목명은 현재가 조회 응답으로 채운다 (전략에는 코드만 저장돼 있음).
+      _selected = SymbolInfo(symbol: initial.symbol, name: initial.symbol);
+      _symbolQuery.text = initial.symbol;
+      WidgetsBinding.instance.addPostFrameCallback((_) => _lookupQuote());
       _buyBelow.text = _plain(initial.buyBelow);
       _sellAbove.text = _plain(initial.sellAbove);
       _quantity.text = initial.assetClass == AssetClass.krStock
@@ -68,7 +85,8 @@ class _StrategyFormScreenState extends ConsumerState<StrategyFormScreen> {
 
   @override
   void dispose() {
-    for (final c in [_name, _symbol, _buyBelow, _sellAbove, _quantity, _stopLoss]) {
+    _searchDebounce?.cancel();
+    for (final c in [_name, _symbol, _symbolQuery, _buyBelow, _sellAbove, _quantity, _stopLoss]) {
       c.dispose();
     }
     super.dispose();
@@ -95,7 +113,7 @@ class _StrategyFormScreenState extends ConsumerState<StrategyFormScreen> {
     if (buy == null || qty == null || stop == null || _normalizedSymbol.isEmpty) return null;
     final name = _name.text.trim();
     return StrategyDraft(
-      name: name.isEmpty ? '$_normalizedSymbol 가격 전략' : name,
+      name: name.isEmpty ? '${_selected?.name ?? _normalizedSymbol} 가격 전략' : name,
       assetClass: _assetClass,
       symbol: _normalizedSymbol,
       buyBelow: buy,
@@ -128,7 +146,7 @@ class _StrategyFormScreenState extends ConsumerState<StrategyFormScreen> {
               selected: {_assetClass},
               onSelectionChanged: (s) => setState(() {
                 _assetClass = s.first;
-                _clearQuote();
+                _clearSelection();
                 _quantity.text = _isCrypto ? '' : '1';
                 _formKey.currentState?.validate();
               }),
@@ -136,33 +154,38 @@ class _StrategyFormScreenState extends ConsumerState<StrategyFormScreen> {
             const SizedBox(height: 16),
             TextFormField(
               key: const ValueKey('field-symbol'),
-              controller: _symbol,
+              controller: _symbolQuery,
+              readOnly: _selected != null,
               decoration: InputDecoration(
                 labelText: '종목',
-                hintText: _isCrypto ? '예: KRW-BTC' : '예: 005930 (6자리 종목코드)',
+                hintText: _isCrypto ? '코인 이름이나 티커로 검색 (예: 비트코인, BTC)' : '종목명이나 코드로 검색 (예: 삼성전자)',
                 border: const OutlineInputBorder(),
-                suffixIcon: IconButton(
-                  key: const ValueKey('lookup-quote'),
-                  tooltip: '현재가 조회',
-                  icon: const Icon(Icons.search),
-                  onPressed: _symbolLooksValid && !_quoteLoading ? _lookupQuote : null,
-                ),
+                prefixIcon: const Icon(Icons.search),
+                suffixIcon: _selected == null
+                    ? (_searching
+                        ? const Padding(
+                            padding: EdgeInsets.all(12),
+                            child: SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2)),
+                          )
+                        : null)
+                    : IconButton(
+                        key: const ValueKey('clear-symbol'),
+                        tooltip: '다른 종목 선택',
+                        icon: const Icon(Icons.close),
+                        onPressed: () => setState(_clearSelection),
+                      ),
               ),
-              textCapitalization: TextCapitalization.characters,
-              onChanged: (_) => setState(_clearQuote),
-              onFieldSubmitted: (_) => _lookupQuote(),
-              validator: (_) {
-                final s = _normalizedSymbol;
-                if (s.isEmpty) return '종목을 입력하세요.';
-                if (_isCrypto && !RegExp(r'^KRW-[A-Z0-9]+$').hasMatch(s)) {
-                  return '원화 마켓 코드만 가능해요 (예: KRW-BTC).';
-                }
-                if (!_isCrypto && !RegExp(r'^\d{6}$').hasMatch(s)) {
-                  return '6자리 숫자 종목코드를 입력하세요.';
-                }
-                return null;
-              },
+              onChanged: _onQueryChanged,
+              validator: (_) => _selected == null ? '종목을 검색해서 목록에서 선택하세요.' : null,
             ),
+            if (_selected == null)
+              _SymbolResults(
+                query: _symbolQuery.text.trim(),
+                results: _results,
+                searching: _searching,
+                error: _searchError,
+                onSelect: _selectSymbol,
+              ),
             _QuotePanel(
               quote: _quote,
               error: _quoteError,
@@ -269,20 +292,76 @@ class _StrategyFormScreenState extends ConsumerState<StrategyFormScreen> {
     );
   }
 
-  bool get _symbolLooksValid => _isCrypto
-      ? RegExp(r'^KRW-[A-Z0-9]+$').hasMatch(_normalizedSymbol)
-      : RegExp(r'^\d{6}$').hasMatch(_normalizedSymbol);
-
   void _clearQuote() {
     _quote = null;
     _quoteError = null;
   }
 
-  Future<void> _lookupQuote() async {
-    if (!_symbolLooksValid) {
-      _formKey.currentState?.validate();
-      return;
+  void _clearSelection() {
+    _searchDebounce?.cancel();
+    _searchSeq++;
+    _selected = null;
+    _symbol.clear();
+    _symbolQuery.clear();
+    _results = const [];
+    _searching = false;
+    _searchError = null;
+    _clearQuote();
+  }
+
+  void _onQueryChanged(String text) {
+    _searchDebounce?.cancel();
+    final query = text.trim();
+    setState(() {
+      _searchError = null;
+      if (query.isEmpty) {
+        _results = const [];
+        _searching = false;
+      } else {
+        _searching = true;
+      }
+    });
+    if (query.isEmpty) return;
+    // 글자를 칠 때마다 요청하지 않도록 잠깐 멈췄을 때만 검색한다.
+    _searchDebounce = Timer(const Duration(milliseconds: 300), () => _search(query));
+  }
+
+  Future<void> _search(String query) async {
+    final seq = ++_searchSeq;
+    final assetClass = _assetClass;
+    try {
+      final results = await ref.read(marketWatchRepositoryProvider).searchSymbols(assetClass.apiValue, query);
+      if (!mounted || seq != _searchSeq) return;
+      setState(() => _results = results);
+    } on DioException catch (e) {
+      if (!mounted || seq != _searchSeq) return;
+      final detail = e.response?.data is Map ? (e.response!.data as Map)['detail'] : null;
+      setState(() {
+        _results = const [];
+        _searchError = '${detail ?? '종목을 검색하지 못했어요.'}';
+      });
+    } finally {
+      if (mounted && seq == _searchSeq) setState(() => _searching = false);
     }
+  }
+
+  void _selectSymbol(SymbolInfo symbol) {
+    _searchDebounce?.cancel();
+    _searchSeq++;
+    setState(() {
+      _selected = symbol;
+      _symbol.text = symbol.symbol;
+      _symbolQuery.text = symbol.label;
+      _results = const [];
+      _searching = false;
+      _clearQuote();
+    });
+    _formKey.currentState?.validate();
+    _lookupQuote(); // 고르자마자 현재가를 보여준다
+  }
+
+  Future<void> _lookupQuote() async {
+    if (_selected == null) return;
     final symbol = _normalizedSymbol;
     final assetClass = _assetClass;
     setState(() {
@@ -293,7 +372,15 @@ class _StrategyFormScreenState extends ConsumerState<StrategyFormScreen> {
       final quote = await ref.read(marketWatchRepositoryProvider).fetchQuote(assetClass.apiValue, symbol);
       // 조회하는 사이 종목/거래소를 바꿨으면 결과를 버린다.
       if (!mounted || symbol != _normalizedSymbol || assetClass != _assetClass) return;
-      setState(() => _quote = quote);
+      setState(() {
+        _quote = quote;
+        // 수정 화면에서는 저장된 코드만 알고 있으므로 조회된 종목명으로 표시를 채운다.
+        final selected = _selected;
+        if (selected != null && selected.name == selected.symbol && quote.name != null) {
+          _selected = SymbolInfo(symbol: selected.symbol, name: quote.name!, market: selected.market);
+          _symbolQuery.text = _selected!.label;
+        }
+      });
     } on DioException catch (e) {
       final detail = e.response?.data is Map ? (e.response!.data as Map)['detail'] : null;
       if (mounted) setState(() => _quoteError = '${detail ?? '현재가를 불러오지 못했어요.'}');
@@ -368,6 +455,7 @@ class _StrategyFormScreenState extends ConsumerState<StrategyFormScreen> {
     }
   }
 }
+
 
 /// 화면에 넣을 가격 단위: 100원 이상은 원 단위, 그보다 싼 코인은 소수점 4자리.
 double roundQuotePrice(double value, {required bool roundUp}) {
@@ -452,6 +540,63 @@ class _QuotePanel extends StatelessWidget {
                   ),
               ],
             ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+
+class _SymbolResults extends StatelessWidget {
+  const _SymbolResults({
+    required this.query,
+    required this.results,
+    required this.searching,
+    required this.error,
+    required this.onSelect,
+  });
+
+  final String query;
+  final List<SymbolInfo> results;
+  final bool searching;
+  final String? error;
+  final ValueChanged<SymbolInfo> onSelect;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    if (query.isEmpty) return const SizedBox.shrink();
+    if (error != null) {
+      return Padding(
+        padding: const EdgeInsets.only(top: 8, left: 12),
+        child: Text(error!, style: TextStyle(color: theme.colorScheme.error)),
+      );
+    }
+    if (searching && results.isEmpty) return const SizedBox.shrink();
+    if (results.isEmpty) {
+      return const Padding(
+        padding: EdgeInsets.only(top: 8, left: 12),
+        child: Text('검색 결과가 없어요.', key: ValueKey('symbol-no-results')),
+      );
+    }
+    return Card(
+      key: const ValueKey('symbol-results'),
+      margin: const EdgeInsets.only(top: 4),
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxHeight: 320),
+        child: ListView(
+          shrinkWrap: true,
+          padding: EdgeInsets.zero,
+          children: [
+            for (final s in results)
+              ListTile(
+                key: ValueKey('symbol-option-${s.symbol}'),
+                dense: true,
+                title: Text(s.name),
+                subtitle: Text(s.market.isEmpty ? s.symbol : '${s.symbol} · ${s.market}'),
+                onTap: () => onSelect(s),
+              ),
           ],
         ),
       ),

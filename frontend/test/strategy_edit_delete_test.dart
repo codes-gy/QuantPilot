@@ -2,10 +2,13 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 
+import 'package:quantpilot/features/market_watch/data/market_watch_repository.dart';
 import 'package:quantpilot/features/strategy/data/strategy_repository.dart';
 import 'package:quantpilot/features/strategy/domain/strategy.dart';
 import 'package:quantpilot/features/strategy/presentation/strategy_form_screen.dart';
 import 'package:quantpilot/features/strategy/presentation/strategy_list_screen.dart';
+
+import 'support/fake_market_repository.dart';
 
 const _paused = Strategy(
   id: 7,
@@ -51,7 +54,10 @@ Future<void> _pump(WidgetTester tester, StrategyRepository repo, Widget home) as
   addTearDown(tester.view.reset);
   await tester.pumpWidget(
     ProviderScope(
-      overrides: [strategyRepositoryProvider.overrideWithValue(repo)],
+      overrides: [
+        strategyRepositoryProvider.overrideWithValue(repo),
+        marketWatchRepositoryProvider.overrideWithValue(FakeMarketRepository()),
+      ],
       child: MaterialApp(home: home),
     ),
   );
@@ -67,7 +73,8 @@ void main() {
     await _pump(tester, repo, const StrategyFormScreen(initial: _paused));
 
     expect(find.text('전략 수정'), findsOneWidget);
-    expect(_fieldText(tester, 'field-symbol'), '005930');
+    expect(_fieldText(tester, 'field-symbol'), '삼성전자 (005930)'); // 현재가 조회로 종목명 채움
+    expect(find.textContaining('현재가 220,500원'), findsOneWidget);
     expect(_fieldText(tester, 'field-buy'), '7000');
     expect(_fieldText(tester, 'field-sell'), '7500');
     expect(_fieldText(tester, 'field-quantity'), '1');

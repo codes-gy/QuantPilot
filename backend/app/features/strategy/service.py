@@ -1,5 +1,7 @@
 """전략 애플리케이션 서비스 — StrategyRepository 포트에만 의존한다."""
 
+import re
+
 from app.core.exceptions import QuantPilotError
 from app.features.broker.base import AssetClass
 from app.features.strategy.engine import validate_rule
@@ -30,7 +32,8 @@ def validate_runnable(strategy: Strategy) -> None:
     else:
         if asset_class is AssetClass.CRYPTO and not strategy.symbol.startswith("KRW-"):
             problems.append("코인은 원화 마켓(KRW-*) 심볼만 지원합니다.")
-        if asset_class is AssetClass.KR_STOCK and not (strategy.symbol.isdigit() and len(strategy.symbol) == 6):
+        # 2024년 이후 신규 상장 종목은 0001A0처럼 영문 대문자가 섞인 6자리 코드를 쓴다.
+        if asset_class is AssetClass.KR_STOCK and not re.fullmatch(r"[0-9A-Z]{6}", strategy.symbol):
             problems.append("국내 주식 심볼은 6자리 종목코드여야 합니다.")
     if not strategy.entry_rule:
         problems.append("매수 규칙(entry_rule)이 없습니다.")

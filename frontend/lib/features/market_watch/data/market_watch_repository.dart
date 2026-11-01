@@ -4,6 +4,7 @@ import '../../../core/di/providers.dart';
 import '../../../core/network/api_client.dart';
 import '../domain/price_tick.dart';
 import '../domain/quote.dart';
+import '../domain/symbol_info.dart';
 
 class MarketWatchRepository {
   MarketWatchRepository(this._api);
@@ -20,6 +21,15 @@ class MarketWatchRepository {
   Future<Quote> fetchQuote(String assetClass, String symbol) async {
     final response = await _api.dio.get('/market-data/$assetClass/$symbol/quote');
     return Quote.fromJson(response.data as Map<String, dynamic>);
+  }
+
+  /// 종목명 또는 코드 일부로 검색한다 (주식: KIS 종목 마스터, 코인: 업비트 원화 마켓).
+  Future<List<SymbolInfo>> searchSymbols(String assetClass, String query, {int limit = 20}) async {
+    final response = await _api.dio.get(
+      '/market-data/$assetClass/symbols',
+      queryParameters: {'q': query, 'limit': limit},
+    );
+    return (response.data as List).map((e) => SymbolInfo.fromJson(e as Map<String, dynamic>)).toList();
   }
 }
 

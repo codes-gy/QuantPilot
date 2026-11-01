@@ -98,6 +98,13 @@ async def test_invalid_strategy_can_still_be_paused():
     assert paused.status == StrategyStatus.PAUSED
 
 
+async def test_alphanumeric_stock_code_is_valid():
+    # 2024년 이후 신규 상장 종목코드 (예: 0001A0 덕양에너젠)
+    repo = InMemoryStrategyRepository([_strategy(symbol="0001A0")])
+    activated = await StrategyService(repo).set_status(1, StrategyStatus.ACTIVE)
+    assert activated.status == StrategyStatus.ACTIVE
+
+
 async def test_crypto_strategy_with_krw_market_is_valid():
     repo = InMemoryStrategyRepository(
         [_strategy(asset_class="crypto", symbol="KRW-BTC", max_position_size=0.0001)]

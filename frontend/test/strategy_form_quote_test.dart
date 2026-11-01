@@ -1,40 +1,17 @@
-import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:quantpilot/features/market_watch/data/market_watch_repository.dart';
-import 'package:quantpilot/features/market_watch/domain/quote.dart';
 import 'package:quantpilot/features/strategy/presentation/strategy_form_screen.dart';
 
-class _FakeMarketRepository implements MarketWatchRepository {
-  final requests = <String>[];
+import 'support/fake_market_repository.dart';
 
-  @override
-  Future<Quote> fetchQuote(String assetClass, String symbol) async {
-    requests.add('$assetClass/$symbol');
-    if (symbol == '999999') {
-      final options = RequestOptions(path: '/market-data/$assetClass/$symbol/quote');
-      throw DioException(
-        requestOptions: options,
-        response: Response(requestOptions: options, statusCode: 404, data: {'detail': '종목코드를 찾을 수 없어요: 999999'}),
-      );
-    }
-    if (assetClass == 'crypto') {
-      return const Quote(symbol: 'KRW-VTHO', name: '비토르토큰', price: 0.7612, changeRate: 1.2);
-    }
-    return const Quote(symbol: '005930', name: '삼성전자', price: 220500, changeRate: -4.96);
-  }
-
-  @override
-  dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
-}
-
-Future<_FakeMarketRepository> _open(WidgetTester tester) async {
+Future<FakeMarketRepository> _open(WidgetTester tester) async {
   tester.view.physicalSize = const Size(800, 1800);
   tester.view.devicePixelRatio = 1.0;
   addTearDown(tester.view.reset);
-  final market = _FakeMarketRepository();
+  final market = FakeMarketRepository();
   await tester.pumpWidget(
     ProviderScope(
       overrides: [marketWatchRepositoryProvider.overrideWithValue(market)],
@@ -47,20 +24,23 @@ Future<_FakeMarketRepository> _open(WidgetTester tester) async {
 String _text(WidgetTester tester, String key) =>
     tester.widget<TextFormField>(find.byKey(ValueKey(key))).controller!.text;
 
-Future<void> _lookup(WidgetTester tester, String symbol) async {
-  await tester.enterText(find.byKey(const ValueKey('field-symbol')), symbol);
-  await tester.pump();
-  await tester.tap(find.byKey(const ValueKey('lookup-quote')));
-  await tester.pumpAndSettle();
-}
-
 void main() {
-  testWidgets('lookup shows name, price and change rate, chips fill prices', (tester) async {
+  testWidgets('search by name, pick from list, then quote loads automatically', (tester) async {
     final market = await _open(tester);
-    await _lookup(tester, '005930');
+    await tester.enterText(find.byKey(const ValueKey('field-symbol')), '삼성');
+    await tester.pump(const Duration(milliseconds: 350));
+    await tester.pumpAndSettle();
 
-    expect(market.requests, ['kr_stock/005930']);
-    expect(find.text('삼성전자'), findsOneWidget);
+    expect(market.searches, ['kr_stock/삼성']); // 디바운스: 한 번만 검색
+    expect(find.byKey(const ValueKey('symbol-option-005930')), findsOneWidget);
+    expect(find.byKey(const ValueKey('symbol-option-005935')), findsOneWidget);
+
+    await tester.tap(find.byKey(const ValueKey('symbol-option-005930')));
+    await tester.pumpAndSettle();
+
+    expect(_text(tester, 'field-symbol'), '삼성전자 (005930)');
+    expect(find.byKey(const ValueKey('symbol-results')), findsNothing);
+    expect(market.quoteRequests, ['kr_stock/005930']);
     expect(find.textContaining('현재가 220,500원'), findsOneWidget);
     expect(find.textContaining('-4.96%'), findsOneWidget);
 
@@ -71,39 +51,46 @@ void main() {
     expect(_text(tester, 'field-sell'), '231525'); // 220,500 x 1.05, 올림
   });
 
-  testWidgets('lookup button is disabled until the symbol format is valid', (tester) async {
-    final market = await _open(tester);
-    await tester.enterText(find.byKey(const ValueKey('field-symbol')), '0059');
-    await tester.pump();
-    await tester.tap(find.byKey(const ValueKey('lookup-quote')));
-    await tester.pumpAndSettle();
-    expect(market.requests, isEmpty);
+  testWidgets('new alphanumeric stock code can be found by name', (tester) async {
+    await _open(tester);
+    await searchAndSelect(tester, '덕양', '0001A0');
+    expect(_text(tester, 'field-symbol'), '덕양에너젠 (0001A0)');
+    expect(find.textContaining('현재가 7,120원'), findsOneWidget);
   });
 
-  testWidgets('unknown symbol shows server message', (tester) async {
+  testWidgets('no results message', (tester) async {
     await _open(tester);
-    await _lookup(tester, '999999');
+    await tester.enterText(find.byKey(const ValueKey('field-symbol')), '없는회사');
+    await tester.pump(const Duration(milliseconds: 350));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('symbol-no-results')), findsOneWidget);
+  });
+
+  testWidgets('quote failure shows server message', (tester) async {
+    await _open(tester);
+    await searchAndSelect(tester, '시세없는', '999999');
     expect(find.text('종목코드를 찾을 수 없어요: 999999'), findsOneWidget);
     expect(find.byKey(const ValueKey('quote-price')), findsNothing);
   });
 
-  testWidgets('changing the symbol clears the previous quote', (tester) async {
+  testWidgets('clearing the selection resets symbol and quote', (tester) async {
     await _open(tester);
-    await _lookup(tester, '005930');
-    expect(find.text('삼성전자'), findsOneWidget);
+    await searchAndSelect(tester, '삼성', '005930');
+    expect(find.text('삼성전자'), findsOneWidget); // 현재가 카드의 종목명
 
-    await tester.enterText(find.byKey(const ValueKey('field-symbol')), '00066');
-    await tester.pump();
-    expect(find.text('삼성전자'), findsNothing);
+    await tester.tap(find.byKey(const ValueKey('clear-symbol')));
+    await tester.pumpAndSettle();
+    expect(_text(tester, 'field-symbol'), '');
+    expect(find.byKey(const ValueKey('quote-price')), findsNothing);
   });
 
-  testWidgets('cheap coins keep decimal precision', (tester) async {
+  testWidgets('switching to coins searches Upbit markets and keeps decimals', (tester) async {
     final market = await _open(tester);
     await tester.tap(find.text('코인 (업비트)'));
     await tester.pumpAndSettle();
-    await _lookup(tester, 'krw-vtho');
+    await searchAndSelect(tester, '비토르', 'KRW-VTHO');
 
-    expect(market.requests, ['crypto/KRW-VTHO']);
+    expect(market.searches, ['crypto/비토르']);
     await tester.tap(find.byKey(const ValueKey('use-buy--5')));
     await tester.pump();
     expect(_text(tester, 'field-buy'), '0.7231'); // 0.7612 x 0.95 = 0.72314, 내림
