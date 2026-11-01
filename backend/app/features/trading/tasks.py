@@ -121,24 +121,30 @@ async def _poll_pending_order_fills() -> int:
     checked = 0
     async with AsyncSessionLocal() as db:
         orders_repo = SqlAlchemyOrderRepository(db)
-        facade = OrderExecutionFacade(
-            orders=orders_repo,
-            positions=SqlAlchemyPositionRepository(db),
-            risk_guard=RiskGuard(
-                kill_switch=RedisKillSwitchRepository(),
-                notifier=get_notification_service(),
-                daily_pnl=RedisDailyPnlRepository(),
-                daily_loss_limit_krw=settings.daily_loss_limit_krw,
-                audit_log=SqlAlchemyKillSwitchAuditLogRepository(db),
-            ),
-            broker=get_broker_adapter(AssetClass.KR_STOCK),  # TODO: Upbit도 폴링이 필요해지면 asset_class별로 분기
-        )
+        facades: dict[str, OrderExecutionFacade] = {}
+
+        def facade_for(asset_class: str) -> OrderExecutionFacade:
+            # 주문마다 자기 자산군(KIS 주식 / Upbit 코인) 브로커로 체결을 확인해야 한다.
+            if asset_class not in facades:
+                facades[asset_class] = OrderExecutionFacade(
+                    orders=orders_repo,
+                    positions=SqlAlchemyPositionRepository(db),
+                    risk_guard=RiskGuard(
+                        kill_switch=RedisKillSwitchRepository(),
+                        notifier=get_notification_service(),
+                        daily_pnl=RedisDailyPnlRepository(),
+                        daily_loss_limit_krw=settings.daily_loss_limit_krw,
+                        audit_log=SqlAlchemyKillSwitchAuditLogRepository(db),
+                    ),
+                    broker=get_broker_adapter(AssetClass(asset_class)),
+                )
+            return facades[asset_class]
 
         pending_orders = await orders_repo.list_pending()
         for order in pending_orders:
             checked += 1
             try:
-                await facade.poll_and_apply_fill(order)
+                await facade_for(order.asset_class).poll_and_apply_fill(order)
             except BrokerAPIError:
                 logger.warning(
                     "failed to poll fill status for order %s, will retry next cycle", order.client_order_id

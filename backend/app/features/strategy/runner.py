@@ -31,18 +31,29 @@ from app.features.risk.redis_repository import RedisDailyPnlRepository, RedisKil
 from app.features.strategy.engine import MarketSnapshot, Signal, evaluate_entry, evaluate_exit
 from app.features.strategy.models import Strategy
 from app.features.strategy.repository import SqlAlchemyStrategyRepository
-from app.features.trading.repository import SqlAlchemyPositionRepository
+from app.features.trading.repository import SqlAlchemyOrderRepository, SqlAlchemyPositionRepository
 from app.features.trading.tasks import submit_order_task
 
 logger = get_logger(__name__)
 
 REFRESH_INTERVAL_SECONDS = 30
 MAX_PRICE_HISTORY = 200
+# 주문 제출(delay) 후 워커가 주문을 DB에 기록하기 전까지는 has_open_order()로 잡히지 않는다.
+# 코인은 틱이 초당 여러 번 들어오므로 그 사이 같은 신호로 주문이 연달아 나가지 않게,
+# 전략별로 마지막 제출 이후 이 시간 동안은 새 주문을 내지 않는다.
+SUBMIT_COOLDOWN_SECONDS = 60
+
+_last_submitted_at: dict[int, float] = {}
 
 
 async def _load_active_strategies() -> list[Strategy]:
     async with AsyncSessionLocal() as db:
         return await SqlAlchemyStrategyRepository(db).list_active()
+
+
+async def _has_open_order(symbol: str) -> bool:
+    async with AsyncSessionLocal() as db:
+        return await SqlAlchemyOrderRepository(db).has_open_order(symbol)
 
 
 async def _current_position_qty_and_entry(symbol: str) -> tuple[float, float] | None:
@@ -94,6 +105,14 @@ async def _evaluate_strategy(
     if signal is Signal.HOLD:
         return
 
+    # 중복 주문 방지: 직전 제출 직후이거나, 이 종목에 아직 체결/취소되지 않은 주문이 있으면
+    # 이번 신호는 건너뛴다 (체결이 확정돼 포지션이 갱신된 뒤 다음 틱에서 다시 판단).
+    last = _last_submitted_at.get(strategy.id)
+    if last is not None and time.monotonic() - last < SUBMIT_COOLDOWN_SECONDS:
+        return
+    if await _has_open_order(strategy.symbol):
+        return
+
     quantity = position[0] if signal is Signal.SELL and position is not None else strategy.max_position_size
     submit_order_task.delay(
         client_order_id=str(uuid.uuid4()),
@@ -103,17 +122,11 @@ async def _evaluate_strategy(
         asset_class=strategy.asset_class,
         strategy_id=strategy.id,
     )
+    _last_submitted_at[strategy.id] = time.monotonic()
+    logger.info("submitted %s order for strategy %s (%s)", signal.value, strategy.id, strategy.symbol)
 
 
-async def run() -> None:
-    configure_logging()
-    settings = get_settings()
-    risk_guard = RiskGuard(
-        kill_switch=RedisKillSwitchRepository(),
-        notifier=get_notification_service(),
-        daily_pnl=RedisDailyPnlRepository(),
-        daily_loss_limit_krw=settings.daily_loss_limit_krw,
-    )
+async def _run_asset_class(asset_class: AssetClass, risk_guard: RiskGuard) -> None:
     price_cache = get_price_cache()
     price_history: dict[str, list[float]] = defaultdict(list)
 
@@ -121,19 +134,21 @@ async def run() -> None:
         strategies = await _load_active_strategies()
         symbol_strategies: dict[str, list[Strategy]] = defaultdict(list)
         for strategy in strategies:
-            if strategy.asset_class == AssetClass.KR_STOCK.value:
+            if strategy.asset_class == asset_class.value:
                 symbol_strategies[strategy.symbol].append(strategy)
         watched_symbols = list(symbol_strategies.keys())
 
         if not watched_symbols:
             logger.info(
-                "no active KR_STOCK strategies; rechecking in %ss", REFRESH_INTERVAL_SECONDS
+                "no active %s strategies; rechecking in %ss", asset_class.name, REFRESH_INTERVAL_SECONDS
             )
             await asyncio.sleep(REFRESH_INTERVAL_SECONDS)
             continue
 
-        logger.info("subscribing to %d symbol(s): %s", len(watched_symbols), watched_symbols)
-        subscription = price_cache.subscribe(AssetClass.KR_STOCK, watched_symbols)
+        logger.info(
+            "subscribing %s to %d symbol(s): %s", asset_class.name, len(watched_symbols), watched_symbols
+        )
+        subscription = price_cache.subscribe(asset_class, watched_symbols)
         cycle_deadline = time.monotonic() + REFRESH_INTERVAL_SECONDS
 
         while time.monotonic() < cycle_deadline:
@@ -155,9 +170,28 @@ async def run() -> None:
                 continue
 
             for strategy in symbol_strategies.get(symbol, []):
-                await _evaluate_strategy(strategy, snapshot, risk_guard)
+                try:
+                    await _evaluate_strategy(strategy, snapshot, risk_guard)
+                except Exception:
+                    # 한 전략의 평가 오류가 같은 자산군의 다른 전략 감시까지 멈추지 않게 한다.
+                    logger.exception("strategy %s evaluation failed", strategy.id)
 
         await subscription.aclose()
+
+
+async def run() -> None:
+    configure_logging()
+    settings = get_settings()
+    risk_guard = RiskGuard(
+        kill_switch=RedisKillSwitchRepository(),
+        notifier=get_notification_service(),
+        daily_pnl=RedisDailyPnlRepository(),
+        daily_loss_limit_krw=settings.daily_loss_limit_krw,
+    )
+    await asyncio.gather(
+        _run_asset_class(AssetClass.KR_STOCK, risk_guard),
+        _run_asset_class(AssetClass.CRYPTO, risk_guard),
+    )
 
 
 if __name__ == "__main__":

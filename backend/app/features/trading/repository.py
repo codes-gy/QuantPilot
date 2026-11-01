@@ -1,12 +1,17 @@
 """OrderRepository / PositionRepository 포트의 SQLAlchemy 구현체."""
 
-from sqlalchemy import select
+from datetime import datetime, timedelta
+
+from sqlalchemy import and_, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.features.trading.models import Order, OrderStatus, Position
 from app.features.trading.ports import OrderRepository, PositionRepository
 
 _NON_FINAL_STATUSES = (OrderStatus.PENDING, OrderStatus.ACCEPTED, OrderStatus.PARTIALLY_FILLED)
+# 브로커 전송 전에 실패해 PENDING으로 남은 주문이 해당 종목 매매를 영원히 막지 않도록,
+# 브로커 주문번호가 없는 PENDING 주문은 이 시간 안에 생성된 것만 "진행 중"으로 본다.
+_STALE_PENDING_AFTER = timedelta(minutes=10)
 
 
 class SqlAlchemyOrderRepository(OrderRepository):
@@ -33,6 +38,25 @@ class SqlAlchemyOrderRepository(OrderRepository):
             .order_by(Order.created_at.asc())
         )
         return list(result.scalars().all())
+
+    async def has_open_order(self, symbol: str) -> bool:
+        """해당 종목에 아직 최종 상태가 아닌 주문이 있는지. 전략 러너가 같은 신호로
+        주문을 중복 제출하지 않도록 신규 주문 전에 확인한다.
+        """
+        stale_before = datetime.utcnow() - _STALE_PENDING_AFTER
+        result = await self._db.execute(
+            select(Order.id)
+            .where(Order.symbol == symbol)
+            .where(Order.status.in_([s.value for s in _NON_FINAL_STATUSES]))
+            .where(
+                or_(
+                    Order.broker_order_id.is_not(None),
+                    and_(Order.status == OrderStatus.PENDING.value, Order.created_at >= stale_before),
+                )
+            )
+            .limit(1)
+        )
+        return result.first() is not None
 
     async def add(self, order: Order) -> Order:
         self._db.add(order)
