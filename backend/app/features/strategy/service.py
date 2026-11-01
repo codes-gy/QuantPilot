@@ -16,6 +16,10 @@ class InvalidStrategyError(QuantPilotError):
     """전략 설정이 실행할 수 없는 상태라 켤 수 없음."""
 
 
+class StrategyActiveError(QuantPilotError):
+    """실행 중인 전략은 수정/삭제할 수 없음 — 먼저 꺼야 한다."""
+
+
 def validate_runnable(strategy: Strategy) -> None:
     """러너가 실제로 실행할 수 있는 설정인지 확인한다 (켜기 직전에 호출)."""
     problems: list[str] = []
@@ -54,6 +58,27 @@ class StrategyService:
 
     async def list_strategies(self) -> list[Strategy]:
         return await self._strategies.list_all()
+
+    async def _get_paused(self, strategy_id: int, action: str) -> Strategy:
+        """수정/삭제 대상 조회. 실행 중인 전략을 바로 바꾸면 매매 도중 조건이 갑자기 바뀌거나
+        감시 중이던 전략이 사라지므로, 꺼진 전략만 허용한다.
+        """
+        strategy = await self._strategies.get(strategy_id)
+        if strategy is None:
+            raise StrategyNotFoundError(f"strategy {strategy_id} not found")
+        if strategy.status == StrategyStatus.ACTIVE:
+            raise StrategyActiveError(f"실행 중인 전략은 {action}할 수 없어요. 먼저 꺼 주세요.")
+        return strategy
+
+    async def update_strategy(self, strategy_id: int, payload: StrategyCreate) -> Strategy:
+        strategy = await self._get_paused(strategy_id, "수정")
+        for field, value in payload.model_dump().items():
+            setattr(strategy, field, value)
+        return await self._strategies.update(strategy)
+
+    async def delete_strategy(self, strategy_id: int) -> None:
+        strategy = await self._get_paused(strategy_id, "삭제")
+        await self._strategies.delete(strategy)
 
     async def set_status(self, strategy_id: int, status: StrategyStatus) -> Strategy:
         """전략을 켜거나(active) 끈다(paused). 켤 때만 설정 검증을 한다 — 끄는 것은

@@ -8,6 +8,7 @@ from app.features.strategy.repository import SqlAlchemyStrategyRepository
 from app.features.strategy.schemas import StrategyCreate, StrategyOut
 from app.features.strategy.service import (
     InvalidStrategyError,
+    StrategyActiveError,
     StrategyNotFoundError,
     StrategyService,
 )
@@ -57,3 +58,30 @@ async def pause_strategy(
 ) -> StrategyOut:
     """전략을 끈다. 신규 주문뿐 아니라 보유 포지션의 손절/익절 감시도 멈춘다."""
     return await _set_status(service, strategy_id, StrategyStatus.PAUSED)
+
+
+@router.put("/{strategy_id}", response_model=StrategyOut)
+async def update_strategy(
+    strategy_id: int, payload: StrategyCreate, service: StrategyService = Depends(get_strategy_service)
+) -> StrategyOut:
+    """꺼진 전략의 설정을 바꾼다 (상태는 그대로 꺼진 상태 유지). 실행 중이면 409."""
+    try:
+        strategy = await service.update_strategy(strategy_id, payload)
+    except StrategyNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except StrategyActiveError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return StrategyOut.model_validate(strategy)
+
+
+@router.delete("/{strategy_id}", status_code=204)
+async def delete_strategy(
+    strategy_id: int, service: StrategyService = Depends(get_strategy_service)
+) -> None:
+    """꺼진 전략을 삭제한다. 실행 중이면 409. 과거 주문 기록(orders.strategy_id)은 남는다."""
+    try:
+        await service.delete_strategy(strategy_id)
+    except StrategyNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except StrategyActiveError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc

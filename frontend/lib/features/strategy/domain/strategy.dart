@@ -51,6 +51,17 @@ class Strategy {
         stopLossPct: (json['stop_loss_pct'] as num?)?.toDouble() ?? 0,
       );
 
+  /// 등록 화면(가격 조건 폼)으로 다시 열어 수정할 수 있는 규칙인지.
+  /// 이동평균 등 폼이 표현하지 못하는 규칙은 수정 화면에서 값을 잃지 않도록 막는다.
+  bool get isEditableInForm =>
+      entryRule['type'] == 'price_threshold' &&
+      entryRule['below'] is num &&
+      (exitRule.isEmpty || (exitRule['type'] == 'price_threshold' && exitRule['above'] is num));
+
+  double? get buyBelow => (entryRule['below'] as num?)?.toDouble();
+
+  double? get sellAbove => exitRule.isEmpty ? null : (exitRule['above'] as num?)?.toDouble();
+
   /// 목록에서 한눈에 보는 요약. 예: "7,000원 이하 매수 · 7,500원 이상 매도 · 손절 3% · 1주"
   String get summary => describeRules(
         assetClass: assetClass,

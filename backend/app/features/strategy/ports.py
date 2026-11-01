@@ -19,6 +19,9 @@ class StrategyRepository(ABC):
     async def update(self, strategy: Strategy) -> Strategy: ...
 
     @abstractmethod
+    async def delete(self, strategy: Strategy) -> None: ...
+
+    @abstractmethod
     async def list_active(self) -> list[Strategy]:
         """strategy-runner가 구독할 심볼을 정하기 위해 status=active인 전략만 조회."""
         ...

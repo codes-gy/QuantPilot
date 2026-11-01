@@ -9,13 +9,17 @@ import '../domain/strategy.dart';
 /// Upbit 원화 마켓 최소 주문 금액 (백엔드 upbit/client.py의 MIN_ORDER_KRW와 같은 값).
 const _upbitMinOrderKrw = 5000;
 
-/// 가격 조건(price_threshold) 전략 등록 폼.
+/// 가격 조건(price_threshold) 전략 등록/수정 폼. [initial]을 넘기면 그 전략의 값으로
+/// 채워진 수정 화면이 되고, 저장 시 PUT으로 덮어쓴다 (꺼진 상태 유지).
 ///
 /// 이동평균(ma_cross) 규칙은 지금 엔진이 틱 단위로 계산하고 매도 조건을 반대로 표현할 수
 /// 없어서, 화면에서는 동작이 명확한 가격 조건만 지원한다. 등록된 전략은 항상 꺼진 상태로
 /// 만들어지고, 켜는 것은 목록의 스위치에서 확인 창을 거쳐서만 가능하다.
 class StrategyFormScreen extends ConsumerStatefulWidget {
-  const StrategyFormScreen({super.key});
+  const StrategyFormScreen({super.key, this.initial});
+
+  /// 수정할 전략. null이면 새로 등록. [Strategy.isEditableInForm]인 전략만 넘겨야 한다.
+  final Strategy? initial;
 
   @override
   ConsumerState<StrategyFormScreen> createState() => _StrategyFormScreenState();
@@ -33,9 +37,23 @@ class _StrategyFormScreenState extends ConsumerState<StrategyFormScreen> {
   AssetClass _assetClass = AssetClass.krStock;
   bool _submitting = false;
 
+  bool get _isEdit => widget.initial != null;
+
   @override
   void initState() {
     super.initState();
+    final initial = widget.initial;
+    if (initial != null) {
+      _assetClass = initial.assetClass;
+      _name.text = initial.name;
+      _symbol.text = initial.symbol;
+      _buyBelow.text = _plain(initial.buyBelow);
+      _sellAbove.text = _plain(initial.sellAbove);
+      _quantity.text = initial.assetClass == AssetClass.krStock
+          ? initial.maxPositionSize.toInt().toString()
+          : _plain(initial.maxPositionSize);
+      _stopLoss.text = _plain(initial.stopLossPct * 100);
+    }
     for (final c in [_buyBelow, _sellAbove, _quantity, _stopLoss, _symbol]) {
       c.addListener(() => setState(() {})); // 요약/예상 금액 미리보기 갱신
     }
@@ -47,6 +65,13 @@ class _StrategyFormScreenState extends ConsumerState<StrategyFormScreen> {
       c.dispose();
     }
     super.dispose();
+  }
+
+  /// 입력칸에 넣을 숫자 문자열 (불필요한 소수점 0 제거, 부동소수 오차 정리).
+  static String _plain(num? v) {
+    if (v == null) return '';
+    if (v == v.roundToDouble()) return v.toInt().toString();
+    return double.parse(v.toStringAsFixed(8)).toString();
   }
 
   bool get _isCrypto => _assetClass == AssetClass.crypto;
@@ -81,7 +106,7 @@ class _StrategyFormScreenState extends ConsumerState<StrategyFormScreen> {
     final estimated = (buy != null && qty != null) ? buy * qty : null;
 
     return Scaffold(
-      appBar: AppBar(title: const Text('전략 추가')),
+      appBar: AppBar(title: Text(_isEdit ? '전략 수정' : '전략 추가')),
       body: Form(
         key: _formKey,
         child: ListView(
@@ -199,7 +224,11 @@ class _StrategyFormScreenState extends ConsumerState<StrategyFormScreen> {
               child: ListTile(
                 leading: const Icon(Icons.summarize_outlined),
                 title: Text(draft == null ? '입력하면 요약이 표시돼요' : draft.summary),
-                subtitle: const Text('꺼진 상태로 등록돼요. 목록에서 직접 켜야 매매가 시작돼요.'),
+                subtitle: Text(
+                  _isEdit
+                      ? '저장해도 꺼진 상태 그대로예요. 목록에서 직접 켜야 매매가 시작돼요.'
+                      : '꺼진 상태로 등록돼요. 목록에서 직접 켜야 매매가 시작돼요.',
+                ),
               ),
             ),
             const SizedBox(height: 16),
@@ -208,8 +237,8 @@ class _StrategyFormScreenState extends ConsumerState<StrategyFormScreen> {
               onPressed: _submitting ? null : _submit,
               icon: _submitting
                   ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
-                  : const Icon(Icons.add),
-              label: const Text('등록'),
+                  : Icon(_isEdit ? Icons.save : Icons.add),
+              label: Text(_isEdit ? '저장' : '등록'),
             ),
           ],
         ),
@@ -246,18 +275,28 @@ class _StrategyFormScreenState extends ConsumerState<StrategyFormScreen> {
 
     setState(() => _submitting = true);
     try {
-      await ref.read(strategyRepositoryProvider).create(draft);
+      final repo = ref.read(strategyRepositoryProvider);
+      final initial = widget.initial;
+      if (initial != null) {
+        await repo.update(initial.id, draft);
+      } else {
+        await repo.create(draft);
+      }
       ref.invalidate(strategyListProvider);
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('전략을 꺼진 상태로 등록했어요. 목록에서 켜면 매매가 시작돼요.')),
+        SnackBar(
+          content: Text(
+            initial != null ? '전략을 저장했어요.' : '전략을 꺼진 상태로 등록했어요. 목록에서 켜면 매매가 시작돼요.',
+          ),
+        ),
       );
       Navigator.of(context).pop(true);
     } on DioException catch (e) {
       final detail = e.response?.data is Map ? (e.response!.data as Map)['detail'] : null;
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('등록 실패: ${detail ?? e.message}')),
+          SnackBar(content: Text('${_isEdit ? '저장' : '등록'} 실패: ${detail ?? e.message}')),
         );
       }
     } finally {

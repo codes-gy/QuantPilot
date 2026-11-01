@@ -29,6 +29,10 @@ class SqlAlchemyStrategyRepository(StrategyRepository):
         await self._db.refresh(strategy)
         return strategy
 
+    async def delete(self, strategy: Strategy) -> None:
+        await self._db.delete(strategy)
+        await self._db.commit()
+
     async def list_active(self) -> list[Strategy]:
         result = await self._db.execute(
             select(Strategy).where(Strategy.status == StrategyStatus.ACTIVE)

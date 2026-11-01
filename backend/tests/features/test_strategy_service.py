@@ -2,8 +2,10 @@ import pytest
 
 from app.features.strategy.models import Strategy, StrategyStatus
 from app.features.strategy.ports import StrategyRepository
+from app.features.strategy.schemas import StrategyCreate
 from app.features.strategy.service import (
     InvalidStrategyError,
+    StrategyActiveError,
     StrategyNotFoundError,
     StrategyService,
 )
@@ -28,6 +30,9 @@ class InMemoryStrategyRepository(StrategyRepository):
 
     async def update(self, strategy: Strategy) -> Strategy:
         return strategy
+
+    async def delete(self, strategy: Strategy) -> None:
+        del self._items[strategy.id]
 
 
 def _strategy(**overrides) -> Strategy:
@@ -99,3 +104,56 @@ async def test_crypto_strategy_with_krw_market_is_valid():
     )
     activated = await StrategyService(repo).set_status(1, StrategyStatus.ACTIVE)
     assert activated.status == StrategyStatus.ACTIVE
+
+
+def _payload(**overrides) -> StrategyCreate:
+    fields = dict(
+        name="수정됨",
+        asset_class="crypto",
+        symbol="KRW-BTC",
+        entry_rule={"type": "price_threshold", "below": 100_000_000},
+        exit_rule={},
+        max_position_size=0.0001,
+        stop_loss_pct=0.05,
+    )
+    fields.update(overrides)
+    return StrategyCreate(**fields)
+
+
+async def test_update_paused_strategy_replaces_settings_and_stays_paused():
+    repo = InMemoryStrategyRepository([_strategy()])
+    updated = await StrategyService(repo).update_strategy(1, _payload())
+
+    assert updated.name == "수정됨"
+    assert updated.asset_class == "crypto"
+    assert updated.symbol == "KRW-BTC"
+    assert updated.exit_rule == {}
+    assert updated.stop_loss_pct == 0.05
+    assert updated.status == StrategyStatus.PAUSED
+
+
+async def test_active_strategy_cannot_be_updated_or_deleted():
+    repo = InMemoryStrategyRepository([_strategy(status=StrategyStatus.ACTIVE)])
+    service = StrategyService(repo)
+
+    with pytest.raises(StrategyActiveError):
+        await service.update_strategy(1, _payload())
+    with pytest.raises(StrategyActiveError):
+        await service.delete_strategy(1)
+
+    unchanged = await repo.get(1)
+    assert unchanged is not None and unchanged.name == "test"
+
+
+async def test_delete_paused_strategy():
+    repo = InMemoryStrategyRepository([_strategy()])
+    await StrategyService(repo).delete_strategy(1)
+    assert await repo.list_all() == []
+
+
+async def test_update_or_delete_missing_strategy_raises_not_found():
+    service = StrategyService(InMemoryStrategyRepository([]))
+    with pytest.raises(StrategyNotFoundError):
+        await service.update_strategy(1, _payload())
+    with pytest.raises(StrategyNotFoundError):
+        await service.delete_strategy(1)

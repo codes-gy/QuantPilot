@@ -20,6 +20,15 @@ class StrategyRepository {
     return Strategy.fromJson(response.data as Map<String, dynamic>);
   }
 
+  /// 꺼진 전략의 설정을 바꾼다. 실행 중이면 서버가 409를 돌려준다.
+  Future<Strategy> update(int id, StrategyDraft draft) async {
+    final response = await _api.dio.put('/strategies/$id', data: draft.toJson());
+    return Strategy.fromJson(response.data as Map<String, dynamic>);
+  }
+
+  /// 꺼진 전략을 삭제한다. 실행 중이면 서버가 409를 돌려준다.
+  Future<void> delete(int id) => _api.dio.delete('/strategies/$id');
+
   /// 전략을 켠다. 설정이 잘못돼 있으면 서버가 422와 함께 이유(detail)를 돌려준다.
   Future<Strategy> activate(int id) => _setStatus(id, 'activate');
 

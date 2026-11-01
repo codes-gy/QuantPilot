@@ -77,6 +77,7 @@ class _StrategyTileState extends ConsumerState<_StrategyTile> {
       title: Text(s.name),
       subtitle: Text('${s.symbol} · ${_statusLabel[s.status]}\n${s.summary}'),
       isThreeLine: true,
+      onTap: _busy ? null : _openActions,
       trailing: _busy
           ? const SizedBox(width: 24, height: 24, child: CircularProgressIndicator(strokeWidth: 2))
           : Switch(
@@ -85,6 +86,90 @@ class _StrategyTileState extends ConsumerState<_StrategyTile> {
               onChanged: (on) => _toggle(on),
             ),
     );
+  }
+
+  /// 전략을 누르면 뜨는 수정/삭제 메뉴. 실행 중인 전략은 서버도 409로 막지만, 화면에서
+  /// 먼저 비활성화하고 이유를 보여준다.
+  Future<void> _openActions() async {
+    final s = widget.strategy;
+    final active = s.status == StrategyStatus.active;
+    final canEdit = !active && s.isEditableInForm;
+
+    final action = await showModalBottomSheet<String>(
+      context: context,
+      showDragHandle: true,
+      builder: (ctx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(title: Text(s.name), subtitle: Text(s.summary)),
+            if (active)
+              const ListTile(
+                leading: Icon(Icons.info_outline),
+                title: Text('실행 중인 전략은 수정하거나 삭제할 수 없어요. 먼저 꺼 주세요.'),
+              ),
+            ListTile(
+              key: const ValueKey('action-edit'),
+              leading: const Icon(Icons.edit),
+              title: const Text('수정'),
+              subtitle: !active && !s.isEditableInForm ? const Text('이 규칙은 화면에서 수정할 수 없어요.') : null,
+              enabled: canEdit,
+              onTap: () => Navigator.pop(ctx, 'edit'),
+            ),
+            ListTile(
+              key: const ValueKey('action-delete'),
+              leading: Icon(Icons.delete, color: active ? null : Theme.of(ctx).colorScheme.error),
+              title: const Text('삭제'),
+              enabled: !active,
+              onTap: () => Navigator.pop(ctx, 'delete'),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (!mounted) return;
+    if (action == 'edit') {
+      await Navigator.of(context).push(
+        MaterialPageRoute<bool>(builder: (_) => StrategyFormScreen(initial: s)),
+      );
+    } else if (action == 'delete') {
+      await _delete();
+    }
+  }
+
+  Future<void> _delete() async {
+    final s = widget.strategy;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('전략 삭제'),
+        content: Text('"${s.name}" 전략을 삭제할까요? 되돌릴 수 없어요. 과거 주문 기록은 남아요.'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('취소')),
+          FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: Theme.of(ctx).colorScheme.error),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('삭제'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+
+    setState(() => _busy = true);
+    try {
+      await ref.read(strategyRepositoryProvider).delete(s.id);
+      ref.invalidate(strategyListProvider);
+    } on DioException catch (e) {
+      final detail = e.response?.data is Map ? (e.response!.data as Map)['detail'] : null;
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('삭제 실패: ${detail ?? e.message}')),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
   }
 
   Future<void> _toggle(bool on) async {
