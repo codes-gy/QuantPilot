@@ -1,0 +1,147 @@
+# 메모리 1GB 서버(네이버 클라우드 Micro 등)용 운영 구성.
+#
+# 개발용 docker-compose.yml과 다른 점:
+# - 서버에서 빌드하지 않는다. GitHub Actions가 만든 이미지(ghcr.io)를 받아서 실행만 한다.
+#   1GB 서버에서 pip install까지 하면 메모리가 부족해 멈출 수 있기 때문.
+# - 소스 바인드 마운트와 --reload 없음 (이미지에 든 코드 그대로 실행).
+# - 서비스별 메모리 상한, Celery 워커 동시 실행 1개, Postgres 메모리 설정 축소.
+# - 서버가 재부팅되거나 프로세스가 죽어도 자동으로 다시 뜬다 (restart: unless-stopped).
+# - DB 마이그레이션은 migrate 서비스가 먼저 한 번 실행하고, 성공해야 나머지가 뜬다.
+# - Postgres/Redis 포트는 외부에 열지 않는다. API만 서버 자신(127.0.0.1)에 열고,
+#   화면은 SSH 터널로 접속한다 (deploy/README.md 참고).
+#
+# 사용: docker compose -f docker-compose.prod.yml up -d   (deploy/deploy.sh가 대신 실행)
+
+x-logging: &logging
+  # 로그가 디스크를 채우지 않도록 컨테이너당 최대 30MB로 제한
+  logging:
+    driver: json-file
+    options:
+      max-size: "10m"
+      max-file: "3"
+
+x-backend: &backend
+  image: ${QUANTPILOT_IMAGE:-ghcr.io/codes-gy/quantpilot-backend:latest}
+  env_file:
+    - .env
+  environment:
+    TZ: Asia/Seoul
+  restart: unless-stopped
+  depends_on:
+    migrate:
+      condition: service_completed_successfully
+  <<: *logging
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: quantpilot
+      POSTGRES_PASSWORD: quantpilot
+      POSTGRES_DB: quantpilot
+      TZ: Asia/Seoul
+    # 데이터가 작아서(전략·주문 기록 정도) 기본값보다 훨씬 작게 잡아도 성능 차이가 없다.
+    command:
+      - postgres
+      - -c
+      - shared_buffers=32MB
+      - -c
+      - work_mem=2MB
+      - -c
+      - maintenance_work_mem=16MB
+      - -c
+      - effective_cache_size=128MB
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U quantpilot"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    deploy:
+      resources:
+        limits:
+          memory: 192m
+    <<: *logging
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    # 디스크 저장 필수 — 재시작 시 비상 정지와 오늘 손익이 사라지면 안 된다.
+    # maxmemory는 일부러 두지 않는다: 메모리가 차서 비상 정지 키가 지워지거나 쓰기가 거부되면 위험하다.
+    command: ["redis-server", "--appendonly", "yes", "--appendfsync", "everysec"]
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    deploy:
+      resources:
+        limits:
+          memory: 96m
+    <<: *logging
+
+  # 한 번 실행하고 끝나는 DB 마이그레이션. 실패하면 나머지 서비스가 뜨지 않는다.
+  migrate:
+    image: ${QUANTPILOT_IMAGE:-ghcr.io/codes-gy/quantpilot-backend:latest}
+    command: alembic upgrade head
+    env_file:
+      - .env
+    restart: "no"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    <<: *logging
+
+  api:
+    <<: *backend
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000
+    # 서버 자신에서만 접속 가능. 화면은 SSH 터널(ssh -L 8000:localhost:8000 ...)로 연다.
+    ports:
+      - "127.0.0.1:8000:8000"
+    deploy:
+      resources:
+        limits:
+          memory: 192m
+
+  ingestor:
+    <<: *backend
+    command: python -m app.features.market_data.ingestor
+    deploy:
+      resources:
+        limits:
+          memory: 160m
+
+  strategy-runner:
+    <<: *backend
+    command: python -m app.features.strategy.runner
+    deploy:
+      resources:
+        limits:
+          memory: 160m
+
+  # 동시 실행 1개: 소액 매매라 주문이 몰릴 일이 없고, 프로세스 수가 메모리 사용량을 좌우한다.
+  celery-worker:
+    <<: *backend
+    command: celery -A app.celery_app worker --loglevel=info --concurrency=1
+    deploy:
+      resources:
+        limits:
+          memory: 256m
+
+  celery-beat:
+    <<: *backend
+    command: celery -A app.celery_app beat --loglevel=info --schedule=/tmp/celerybeat-schedule
+    deploy:
+      resources:
+        limits:
+          memory: 128m
+
+volumes:
+  pgdata:
+  redisdata:
