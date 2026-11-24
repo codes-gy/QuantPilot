@@ -13,6 +13,9 @@ class OrderStatus(StrEnum):
     PARTIALLY_FILLED = "partially_filled"
     REJECTED = "rejected"
     CANCELLED = "cancelled"
+    # 미확정: 브로커로 요청을 보냈지만 접수 여부를 모른다 (전송 직전 선기록 상태이기도 하다).
+    # 자동 재전송 대상이 아니며, 브로커 주문 조회(대사)로 결과를 확정한 뒤에만 다음 단계로 간다.
+    UNKNOWN = "unknown"
 
 
 class Order(Base):

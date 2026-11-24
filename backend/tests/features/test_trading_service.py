@@ -19,6 +19,12 @@ class _UnusedOrderRepository(OrderRepository):
     async def list_pending(self):
         raise NotImplementedError
 
+    async def list_unknown(self):
+        raise NotImplementedError
+
+    async def list_broker_order_ids(self, symbol, since):
+        raise NotImplementedError
+
     async def add(self, order):
         raise NotImplementedError
 

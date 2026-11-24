@@ -11,6 +11,7 @@ const _statusLabels = {
   OrderStatus.partiallyFilled: '부분체결',
   OrderStatus.rejected: '거부됨',
   OrderStatus.cancelled: '취소됨',
+  OrderStatus.unknown: '확인 중(미확정)',
 };
 
 class OrdersScreen extends ConsumerWidget {

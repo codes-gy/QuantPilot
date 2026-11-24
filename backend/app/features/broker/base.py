@@ -8,6 +8,7 @@ strategy/trading/risk 레이어는 이 인터페이스에만 의존한다. 새 �
 from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
+from datetime import datetime
 from enum import StrEnum
 from typing import Literal
 
@@ -32,7 +33,9 @@ class OrderRequest:
     order_type: Literal["market", "limit"]
     quantity: float
     price: float | None = None
-    client_order_id: str | None = None  # 멱등성 키 — 재시도 시 중복 주문 방지
+    # 멱등성 키. Upbit은 identifier로 브로커에 함께 보내 대사에 쓴다. KIS 주문 API에는 이런
+    # 필드가 없어 브로커로는 전달되지 않는다 (KIS의 중복 방지는 UNKNOWN 상태 + find_order 대사로 한다).
+    client_order_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -87,6 +90,29 @@ class BrokerAdapter(ABC):
         (poll_pending_order_fills)이 이 메서드로 미체결 주문을 폴링한다.
         """
         ...
+
+    async def find_order(
+        self,
+        order: OrderRequest,
+        *,
+        placed_after: datetime,
+        exclude_broker_order_ids: frozenset[str] = frozenset(),
+    ) -> OrderResult | None:
+        """미확정(UNKNOWN) 주문 대사용 조회. place_order가 OrderOutcomeUnknownError를 던졌거나
+        전송 도중 워커가 죽어 결과를 모르는 주문이 브로커에 실제로 접수됐는지 확인한다.
+
+        - 찾으면 그 주문의 현재 상태(broker_order_id 포함)를 돌려준다.
+        - 접수 기록이 없으면 None.
+        - 판단할 수 없으면(후보 여러 건 등) OrderOutcomeUnknownError, 조회 자체가 실패하면
+          BrokerAPIError.
+
+        placed_after는 timezone-aware datetime이다. exclude_broker_order_ids는 이미 다른 주문
+        레코드에 연결된 브로커 주문번호라 후보에서 빼야 한다.
+
+        기본 구현은 NotImplementedError다. 대사를 지원하지 않는 어댑터의 UNKNOWN 주문은
+        자동으로 풀리지 않으므로 사람이 브로커 화면에서 직접 확인해야 한다.
+        """
+        raise NotImplementedError
 
 
 class MarketDataAdapter(ABC):

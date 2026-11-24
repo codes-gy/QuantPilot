@@ -8,6 +8,8 @@ Celery task 자체는 동기 컨텍스트이므로, 매 실행마다 독립된 D
 run_async(asyncio.run + 루프별 연결 정리)로 파사드(비동기)를 호출한다 — FastAPI 요청 스코프 세션과는 무관하다.
 """
 
+from sqlalchemy.ext.asyncio import AsyncSession
+
 from app.celery_app import celery_app
 from app.core.async_runner import run_async
 from app.core.config import get_settings
@@ -21,9 +23,31 @@ from app.features.risk.guard import RiskGuard
 from app.features.risk.redis_repository import RedisDailyPnlRepository, RedisKillSwitchRepository
 from app.features.risk.repository import SqlAlchemyKillSwitchAuditLogRepository
 from app.features.trading.facade import OrderExecutionFacade
+from app.features.trading.ports import OrderRepository
 from app.features.trading.repository import SqlAlchemyOrderRepository, SqlAlchemyPositionRepository
 
 logger = get_logger(__name__)
+
+
+def _risk_guard(db: AsyncSession) -> RiskGuard:
+    settings = get_settings()
+    return RiskGuard(
+        kill_switch=RedisKillSwitchRepository(),
+        notifier=get_notification_service(),
+        daily_pnl=RedisDailyPnlRepository(),
+        daily_loss_limit_krw=settings.daily_loss_limit_krw,
+        audit_log=SqlAlchemyKillSwitchAuditLogRepository(db),
+    )
+
+
+def _facade(db: AsyncSession, orders: OrderRepository, asset_class: str) -> OrderExecutionFacade:
+    return OrderExecutionFacade(
+        orders=orders,
+        positions=SqlAlchemyPositionRepository(db),
+        risk_guard=_risk_guard(db),
+        broker=get_broker_adapter(AssetClass(asset_class)),
+        notifier=get_notification_service(),
+    )
 
 
 async def _submit_order(
@@ -39,18 +63,7 @@ async def _submit_order(
 ) -> str:
     settings = get_settings()
     async with AsyncSessionLocal() as db:
-        facade = OrderExecutionFacade(
-            orders=SqlAlchemyOrderRepository(db),
-            positions=SqlAlchemyPositionRepository(db),
-            risk_guard=RiskGuard(
-                kill_switch=RedisKillSwitchRepository(),
-                notifier=get_notification_service(),
-                daily_pnl=RedisDailyPnlRepository(),
-                daily_loss_limit_krw=settings.daily_loss_limit_krw,
-                audit_log=SqlAlchemyKillSwitchAuditLogRepository(db),
-            ),
-            broker=get_broker_adapter(AssetClass(asset_class)),
-        )
+        facade = _facade(db, SqlAlchemyOrderRepository(db), asset_class)
         order = await facade.submit_order(
             symbol=symbol,
             side=side,
@@ -84,8 +97,11 @@ def submit_order_task(
     strategy_id: int | None = None,
 ) -> str:
     """client_order_id는 호출부(strategy.runner)가 신호 발생 시점에 미리 발급해 넘겨야
-    한다 — 그래야 이 task가 재시도돼도 매번 동일한 키로 브로커에 전송되어 중복 주문을
-    막을 수 있다.
+    한다 — 그래야 이 task가 재시도돼도 같은 주문 레코드를 다시 찾는다.
+
+    재시도(autoretry_for=BrokerAPIError)는 "브로커에 접수되지 않은 것이 확실한" 실패에만
+    일어난다. 응답이 유실된 경우(OrderOutcomeUnknownError)는 파사드가 주문을 UNKNOWN으로
+    남기고 정상 반환하므로 재시도되지 않는다 — 대사는 poll_pending_order_fills가 맡는다.
 
     KillSwitchEngagedError/RiskLimitExceededError는 재시도 대상이 아니다 — 비상 정지나
     리스크 한도 초과는 시간이 지난다고 해결되는 문제가 아니므로 즉시 실패시키고
@@ -109,45 +125,52 @@ def submit_order_task(
 
 
 async def _poll_pending_order_fills() -> int:
-    """미체결(PENDING/ACCEPTED/PARTIALLY_FILLED) 상태인 주문들의 체결 여부를 브로커에
-    확인하고, 새로 체결된 만큼 포지션/손익에 반영한다. 반환값은 이번 실행에서 확인한
-    주문 수(로그/모니터링용).
+    """주기 작업 본체. 반환값은 이번 실행에서 확인한 주문 수(로그/모니터링용).
+
+    1. UNKNOWN(미확정) 주문을 브로커 주문 조회로 대사한다 (재전송은 하지 않는다).
+    2. 미체결(ACCEPTED/PARTIALLY_FILLED 등, 브로커 주문번호가 있는 것) 주문을 처리한다.
+       - kill switch가 켜져 있으면 취소한다 (비상 정지 = 신규 주문 차단 + 미체결 주문 취소).
+       - 아니면 체결 여부를 확인해 포지션/손익에 반영한다.
 
     place_order 응답에 이미 체결 정보가 포함되는 브로커(테스트 더블 등)는 submit_order()
-    시점에 이미 최종 상태가 되어 list_pending()에 애초에 걸리지 않으므로, 이 폴링은
+    시점에 이미 최종 상태가 되어 list_pending()에 애초에 걸리지 않으므로, 체결 폴링은
     KIS처럼 접수와 체결이 분리된 브로커에서만 실제로 의미가 있다.
     """
-    settings = get_settings()
     checked = 0
     async with AsyncSessionLocal() as db:
         orders_repo = SqlAlchemyOrderRepository(db)
         facades: dict[str, OrderExecutionFacade] = {}
 
         def facade_for(asset_class: str) -> OrderExecutionFacade:
-            # 주문마다 자기 자산군(KIS 주식 / Upbit 코인) 브로커로 체결을 확인해야 한다.
+            # 주문마다 자기 자산군(KIS 주식 / Upbit 코인) 브로커로 확인해야 한다.
             if asset_class not in facades:
-                facades[asset_class] = OrderExecutionFacade(
-                    orders=orders_repo,
-                    positions=SqlAlchemyPositionRepository(db),
-                    risk_guard=RiskGuard(
-                        kill_switch=RedisKillSwitchRepository(),
-                        notifier=get_notification_service(),
-                        daily_pnl=RedisDailyPnlRepository(),
-                        daily_loss_limit_krw=settings.daily_loss_limit_krw,
-                        audit_log=SqlAlchemyKillSwitchAuditLogRepository(db),
-                    ),
-                    broker=get_broker_adapter(AssetClass(asset_class)),
-                )
+                facades[asset_class] = _facade(db, orders_repo, asset_class)
             return facades[asset_class]
 
-        pending_orders = await orders_repo.list_pending()
-        for order in pending_orders:
+        for order in await orders_repo.list_unknown():
             checked += 1
             try:
-                await facade_for(order.asset_class).poll_and_apply_fill(order)
+                await facade_for(order.asset_class).reconcile_unknown_order(order)
+            except Exception:
+                logger.exception("failed to reconcile order %s", order.client_order_id)
+
+        kill_switch_engaged = not await _risk_guard(db).is_trading_allowed()
+
+        for order in await orders_repo.list_pending():
+            checked += 1
+            facade = facade_for(order.asset_class)
+            try:
+                if kill_switch_engaged:
+                    await facade.cancel_open_order(order)
+                    logger.warning("kill switch engaged: cancelled open order %s", order.client_order_id)
+                else:
+                    await facade.poll_and_apply_fill(order)
             except BrokerAPIError:
+                # 취소 실패(이미 체결됨 등)든 조회 실패든, 다음 주기에 다시 확인한다.
                 logger.warning(
-                    "failed to poll fill status for order %s, will retry next cycle", order.client_order_id
+                    "failed to %s order %s, will retry next cycle",
+                    "cancel" if kill_switch_engaged else "poll fill status for",
+                    order.client_order_id,
                 )
                 continue
 
@@ -156,8 +179,8 @@ async def _poll_pending_order_fills() -> int:
 
 @celery_app.task
 def poll_pending_order_fills() -> int:
-    """celery-beat 주기 작업. 접수 확인만 반환하는 브로커(KIS)의 체결 여부를 짧은 주기로
-    확인해서 포지션/일일 손실 한도 서킷브레이커에 반영한다 (자세한 배경은
-    ARCHITECTURE.md 참고).
+    """celery-beat 주기 작업(10초). 접수 확인만 반환하는 브로커(KIS)의 체결 여부 확인,
+    UNKNOWN 주문 대사, kill switch 발동 시 미체결 주문 취소를 담당한다 (자세한 배경은
+    ARCHITECTURE.md 참고). kill switch 발동 직후에는 API가 이 task를 즉시 한 번 실행시킨다.
     """
     return run_async(_poll_pending_order_fills())

@@ -5,6 +5,8 @@
 kill switch가 브로커 호출 *전에* 반드시 걸러지는지를 중점적으로 검증한다.
 """
 
+from datetime import UTC, datetime
+
 import pytest
 
 from app.core.exceptions import KillSwitchEngagedError
@@ -16,9 +18,27 @@ from app.features.trading.ports import OrderRepository, PositionRepository
 
 
 class InMemoryOrderRepository(OrderRepository):
+    """created_at/updated_at은 실제 DB(default/onupdate)처럼 add/update 때 clock()으로 채운다."""
+
     def __init__(self) -> None:
         self._orders_by_client_id: dict[str, Order] = {}
         self._next_id = 1
+        self.clock = lambda: datetime.now(UTC).replace(tzinfo=None)
+        self.status_history: dict[str, list[str]] = {}
+
+    async def list_unknown(self) -> list[Order]:
+        return [
+            order
+            for order in self._orders_by_client_id.values()
+            if OrderStatus(order.status) is OrderStatus.UNKNOWN
+        ]
+
+    async def list_broker_order_ids(self, symbol: str, since: datetime) -> set[str]:
+        return {
+            order.broker_order_id
+            for order in self._orders_by_client_id.values()
+            if order.symbol == symbol and order.broker_order_id and order.created_at >= since
+        }
 
     async def list_recent(self, limit: int = 50) -> list[Order]:
         return list(self._orders_by_client_id.values())[:limit]
@@ -37,11 +57,19 @@ class InMemoryOrderRepository(OrderRepository):
     async def add(self, order: Order) -> Order:
         order.id = self._next_id
         self._next_id += 1
+        now = self.clock()
+        order.created_at = order.created_at or now
+        order.updated_at = now
+        if order.filled_quantity is None:
+            order.filled_quantity = 0.0
         self._orders_by_client_id[order.client_order_id] = order
+        self.status_history.setdefault(order.client_order_id, []).append(str(order.status))
         return order
 
     async def update(self, order: Order) -> Order:
+        order.updated_at = self.clock()
         self._orders_by_client_id[order.client_order_id] = order
+        self.status_history.setdefault(order.client_order_id, []).append(str(order.status))
         return order
 
 
