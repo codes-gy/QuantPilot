@@ -29,6 +29,10 @@ jobs:
         uses: subosito/flutter-action@v2
         with:
           channel: "stable"
+          # 버전을 고정한다. 고정하지 않으면 새 stable(3.50)이 나올 때 material.dart 폐기 경고
+          # (deprecated_member_use)로 코드 변경 없이 analyze가 실패한다. 올릴 때는 로컬에서
+          # analyze/test를 확인한 뒤 이 값을 바꾼다.
+          flutter-version: "3.47.9"
           cache: true
 
       - name: Install dependencies

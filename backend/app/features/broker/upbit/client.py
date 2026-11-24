@@ -23,6 +23,7 @@ Upbit 주문 유형과 우리 OrderRequest의 대응:
 import hashlib
 import math
 import uuid
+from datetime import datetime
 from decimal import Decimal
 from urllib.parse import unquote, urlencode
 
@@ -30,7 +31,12 @@ import httpx
 import jwt
 
 from app.core.config import get_settings
-from app.core.exceptions import BrokerAPIError, RiskLimitExceededError, SymbolNotFoundError
+from app.core.exceptions import (
+    BrokerAPIError,
+    OrderOutcomeUnknownError,
+    RiskLimitExceededError,
+    SymbolNotFoundError,
+)
 from app.core.logging import get_logger
 from app.features.broker.base import (
     AssetClass,
@@ -45,6 +51,15 @@ logger = get_logger(__name__)
 
 UPBIT_BASE_URL = "https://api.upbit.com"
 MIN_ORDER_KRW = 5000  # Upbit 원화 마켓 최소 주문 금액
+
+# 요청이 서버로 나가기 전에 실패한 것이 확실한 예외 (다시 보내도 중복 주문이 아니다).
+_NOT_SENT_ERRORS: tuple[type[Exception], ...] = (
+    httpx.ConnectError,
+    httpx.ConnectTimeout,
+    httpx.PoolTimeout,
+    httpx.LocalProtocolError,
+    httpx.UnsupportedProtocol,
+)
 
 
 def _fmt_number(value: float) -> str:
@@ -156,8 +171,26 @@ class UpbitBrokerAdapter(BrokerAdapter):
         if order.client_order_id:
             params["identifier"] = order.client_order_id
 
-        response = await self._http.post("/v1/orders", json=params, headers=self._auth_headers(params))
-        if response.status_code >= 400 and order.client_order_id:
+        try:
+            response = await self._http.post(
+                "/v1/orders", json=params, headers=self._auth_headers(params)
+            )
+        except _NOT_SENT_ERRORS as exc:
+            raise BrokerAPIError(f"Upbit place order not sent: {exc!r}") from exc
+        except httpx.HTTPError as exc:
+            # 요청은 나갔는데 응답을 못 받았다. 다시 보내지 말고 identifier로 대사한다 (find_order).
+            raise OrderOutcomeUnknownError(
+                f"Upbit place order response lost ({type(exc).__name__}): 접수 여부 미확정"
+            ) from exc
+        if response.status_code < 400:
+            try:
+                data = response.json()
+                return self._to_result(data)
+            except (ValueError, KeyError, TypeError) as exc:
+                raise OrderOutcomeUnknownError(
+                    "Upbit place order returned unparseable response: 접수 여부 미확정"
+                ) from exc
+        if order.client_order_id:
             # Celery 재시도로 같은 identifier가 다시 들어온 경우: 이전 시도가 실제로는
             # 접수됐을 수 있으니, 새로 주문하지 말고 기존 주문 상태를 그대로 돌려준다.
             existing = await self._find_by_identifier(order.client_order_id)
@@ -173,6 +206,31 @@ class UpbitBrokerAdapter(BrokerAdapter):
         if response.status_code >= 400:
             return None
         return self._to_result(response.json())
+
+    async def find_order(
+        self,
+        order: OrderRequest,
+        *,
+        placed_after: datetime,
+        exclude_broker_order_ids: frozenset[str] = frozenset(),
+    ) -> OrderResult | None:
+        """미확정 주문 대사. Upbit은 주문할 때 client_order_id를 identifier로 함께 보내므로
+        그 값으로 정확히 한 건을 조회할 수 있다 (시각/수량으로 추정할 필요가 없다).
+        """
+        self._require_live()
+        if not order.client_order_id:
+            raise OrderOutcomeUnknownError("client_order_id(identifier) 없이는 Upbit 주문을 대사할 수 없음")
+        params = {"identifier": order.client_order_id}
+        try:
+            response = await self._http.get(
+                "/v1/order", params=params, headers=self._auth_headers(params)
+            )
+        except httpx.HTTPError as exc:
+            raise BrokerAPIError(f"Upbit get order by identifier failed: {exc!r}") from exc
+        if response.status_code == 404:
+            return None  # order_not_found: 이 identifier로 접수된 주문이 없다
+        data = self._raise_for_error(response, "get order by identifier")
+        return self._to_result(data)
 
     async def cancel_order(self, broker_order_id: str) -> OrderResult:
         self._require_live()

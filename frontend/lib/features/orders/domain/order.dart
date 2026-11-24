@@ -1,4 +1,4 @@
-enum OrderStatus { pending, accepted, filled, partiallyFilled, rejected, cancelled }
+enum OrderStatus { pending, accepted, filled, partiallyFilled, rejected, cancelled, unknown }
 
 OrderStatus _orderStatusFromJson(String value) {
   switch (value) {
@@ -14,6 +14,8 @@ OrderStatus _orderStatusFromJson(String value) {
       return OrderStatus.rejected;
     case 'cancelled':
       return OrderStatus.cancelled;
+    case 'unknown':
+      return OrderStatus.unknown;
     default:
       throw ArgumentError('unknown order status: $value');
   }

@@ -9,8 +9,10 @@ from app.features.trading.models import Order, OrderStatus, Position
 from app.features.trading.ports import OrderRepository, PositionRepository
 
 _NON_FINAL_STATUSES = (OrderStatus.PENDING, OrderStatus.ACCEPTED, OrderStatus.PARTIALLY_FILLED)
-# 브로커 전송 전에 실패해 PENDING으로 남은 주문이 해당 종목 매매를 영원히 막지 않도록,
-# 브로커 주문번호가 없는 PENDING 주문은 이 시간 안에 생성된 것만 "진행 중"으로 본다.
+# PENDING은 "브로커에 접수되지 않은 것이 확실한" 상태다 (전송 직전에는 UNKNOWN으로 바뀌고,
+# 거부/전송 전 실패가 확실할 때만 PENDING으로 되돌아온다). 그래서 재시도가 모두 실패해
+# PENDING으로 남은 주문은 이 시간이 지나면 더 이상 해당 종목 매매를 막지 않는다.
+# UNKNOWN은 이 규칙을 적용하지 않는다 — 대사로 확정될 때까지 계속 "진행 중"으로 본다.
 _STALE_PENDING_AFTER = timedelta(minutes=10)
 
 
@@ -47,16 +49,41 @@ class SqlAlchemyOrderRepository(OrderRepository):
         result = await self._db.execute(
             select(Order.id)
             .where(Order.symbol == symbol)
-            .where(Order.status.in_([s.value for s in _NON_FINAL_STATUSES]))
             .where(
                 or_(
-                    Order.broker_order_id.is_not(None),
-                    and_(Order.status == OrderStatus.PENDING.value, Order.created_at >= stale_before),
+                    Order.status == OrderStatus.UNKNOWN.value,
+                    and_(
+                        Order.status.in_([s.value for s in _NON_FINAL_STATUSES]),
+                        or_(
+                            Order.broker_order_id.is_not(None),
+                            and_(
+                                Order.status == OrderStatus.PENDING.value,
+                                Order.created_at >= stale_before,
+                            ),
+                        ),
+                    ),
                 )
             )
             .limit(1)
         )
         return result.first() is not None
+
+    async def list_unknown(self) -> list[Order]:
+        result = await self._db.execute(
+            select(Order)
+            .where(Order.status == OrderStatus.UNKNOWN.value)
+            .order_by(Order.created_at.asc())
+        )
+        return list(result.scalars().all())
+
+    async def list_broker_order_ids(self, symbol: str, since: datetime) -> set[str]:
+        result = await self._db.execute(
+            select(Order.broker_order_id)
+            .where(Order.symbol == symbol)
+            .where(Order.broker_order_id.is_not(None))
+            .where(Order.created_at >= since)
+        )
+        return {row for row in result.scalars().all() if row}
 
     async def add(self, order: Order) -> Order:
         self._db.add(order)

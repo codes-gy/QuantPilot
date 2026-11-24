@@ -6,13 +6,19 @@
 
 import hashlib
 import json
+from datetime import UTC, datetime
 from urllib.parse import unquote, urlencode
 
 import httpx
 import jwt
 import pytest
 
-from app.core.exceptions import BrokerAPIError, RiskLimitExceededError, SymbolNotFoundError
+from app.core.exceptions import (
+    BrokerAPIError,
+    OrderOutcomeUnknownError,
+    RiskLimitExceededError,
+    SymbolNotFoundError,
+)
 from app.features.broker.base import OrderRequest
 from app.features.broker.upbit.client import UPBIT_BASE_URL, UpbitBrokerAdapter, _fmt_number
 from app.features.broker.upbit.ws_client import UpbitMarketDataAdapter
@@ -271,3 +277,39 @@ async def test_quote_still_returns_price_when_name_lookup_fails():
     quote = await _adapter(handler).get_quote("KRW-ETH")
     assert quote.price == 3048000.0
     assert quote.name is None
+
+
+# --- 응답 유실(미확정)과 identifier 대사 ---
+
+
+async def test_place_order_response_lost_is_unknown():
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ReadTimeout("timed out", request=request)
+
+    order = OrderRequest(
+        symbol="KRW-BTC", side="sell", order_type="limit", quantity=1, price=100000, client_order_id="cid-1"
+    )
+    with pytest.raises(OrderOutcomeUnknownError):
+        await _adapter(handler).place_order(order)
+
+
+async def test_find_order_looks_up_by_identifier():
+    seen: dict = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["params"] = dict(request.url.params)
+        return httpx.Response(200, json=_order(uuid="u-9"))
+
+    order = OrderRequest(symbol="KRW-BTC", side="buy", order_type="market", quantity=1, client_order_id="cid-9")
+    result = await _adapter(handler).find_order(order, placed_after=datetime.now(UTC))
+
+    assert seen["params"] == {"identifier": "cid-9"}
+    assert (result.broker_order_id, result.status) == ("u-9", "accepted")
+
+
+async def test_find_order_returns_none_when_identifier_not_found():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(404, json={"error": {"name": "order_not_found", "message": "주문을 찾지 못했습니다."}})
+
+    order = OrderRequest(symbol="KRW-BTC", side="buy", order_type="market", quantity=1, client_order_id="cid-9")
+    assert await _adapter(handler).find_order(order, placed_after=datetime.now(UTC)) is None

@@ -4,6 +4,8 @@ from celery.schedules import crontab
 from app.core.config import get_settings
 
 settings = get_settings()
+# 주문을 실제로 내는 워커도 API와 같은 기동 안전 점검을 거친다 (기본 시크릿, 빈 실전 자격증명).
+settings.assert_safe_to_start()
 
 celery_app = Celery(
     "quantpilot",

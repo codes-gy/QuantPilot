@@ -26,6 +26,8 @@ x-backend: &backend
     - .env
   environment:
     TZ: Asia/Seoul
+    # 운영 환경 표시 — 기본 SECRET_KEY(change-me)로는 기동을 거부한다 (backend/app/core/config.py).
+    APP_ENV: production
   restart: unless-stopped
   depends_on:
     migrate:
