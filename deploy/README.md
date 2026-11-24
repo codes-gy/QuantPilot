@@ -48,6 +48,12 @@ scp .env <사용자>@<서버IP>:~/quantpilot/.env
 
 서버의 `.env`는 PC와 같은 값을 그대로 씁니다. `DATABASE_URL`과 `REDIS_URL`도 compose 서비스 이름(`postgres`, `redis`) 기준이라 바꿀 필요가 없습니다.
 
+단, **`SECRET_KEY`는 반드시 기본값(`change-me`)이 아닌 값이어야 합니다.** `docker-compose.prod.yml`이 `APP_ENV=production`을 지정하므로 기본값이면 API, 전략 러너, Celery 워커가 기동을 거부합니다. 다음 명령으로 만든 값을 넣으세요 (바꾸면 기존 로그인 토큰은 만료됩니다).
+
+```bash
+python -c "import secrets; print(secrets.token_urlsafe(48))"
+```
+
 ### 3-2. 업비트 IP 등록
 
 업비트 → 마이페이지 → Open API 관리에서 **서버 공인 IP를 허용 IP에 추가**합니다.

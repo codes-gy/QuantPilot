@@ -73,3 +73,37 @@ def test_live_mode_starts_when_secret_and_credentials_are_all_set() -> None:
     )
 
     settings.assert_safe_to_start()  # 예외 없이 통과해야 한다
+
+
+# --- APP_ENV 기준 기본 시크릿 거부 (paper 모드여도 운영 환경이면 거부) ---
+
+
+@pytest.mark.parametrize("app_env", ["production", "prod", "staging", "Production"])
+@pytest.mark.parametrize("secret_key", ["change-me", "", "  "])
+def test_non_dev_env_rejects_default_or_empty_secret_even_in_paper_mode(app_env, secret_key) -> None:
+    settings = Settings(
+        app_env=app_env, trading_mode=TradingMode.PAPER, secret_key=secret_key, **_base_kwargs()
+    )
+
+    with pytest.raises(RuntimeError, match="SECRET_KEY"):
+        settings.assert_safe_to_start()
+
+
+@pytest.mark.parametrize("app_env", ["local", "test", "LOCAL"])
+def test_dev_envs_allow_default_secret_in_paper_mode(app_env) -> None:
+    settings = Settings(
+        app_env=app_env, trading_mode=TradingMode.PAPER, secret_key="change-me", **_base_kwargs()
+    )
+
+    settings.assert_safe_to_start()
+
+
+def test_non_dev_env_with_real_secret_starts_in_paper_mode() -> None:
+    settings = Settings(
+        app_env="production",
+        trading_mode=TradingMode.PAPER,
+        secret_key="a-real-production-secret",
+        **_base_kwargs(),
+    )
+
+    settings.assert_safe_to_start()
