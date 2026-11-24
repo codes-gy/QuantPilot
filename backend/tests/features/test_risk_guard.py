@@ -134,3 +134,33 @@ async def test_record_fill_pnl_is_noop_without_daily_pnl_repository(kill_switch)
 
     assert await guard.get_today_realized_pnl() == 0.0
     assert await kill_switch.is_engaged() is False
+
+
+# --- KILL_SWITCH_DEFAULT ---
+
+
+async def test_startup_default_engages_kill_switch_and_records_reason(kill_switch, notifier, audit_log):
+    guard = RiskGuard(kill_switch=kill_switch, notifier=notifier, audit_log=audit_log)
+
+    engaged = await guard.apply_startup_default(True)
+
+    assert engaged is True
+    assert await kill_switch.is_engaged() is True
+    assert [event for event, _ in notifier.events] == ["kill_switch_engaged"]
+    assert "KILL_SWITCH_DEFAULT" in (await audit_log.list_recent())[0].reason
+
+
+async def test_startup_default_false_leaves_kill_switch_alone(kill_switch, notifier):
+    guard = RiskGuard(kill_switch=kill_switch, notifier=notifier)
+
+    assert await guard.apply_startup_default(False) is False
+    assert await kill_switch.is_engaged() is False
+    assert notifier.events == []
+
+
+async def test_startup_default_does_not_renotify_when_already_engaged(kill_switch, notifier):
+    await kill_switch.engage()
+    guard = RiskGuard(kill_switch=kill_switch, notifier=notifier)
+
+    assert await guard.apply_startup_default(True) is False
+    assert notifier.events == []

@@ -36,12 +36,25 @@ class RiskGuard:
         return not await self._kill_switch.is_engaged()
 
     async def engage_kill_switch(self, reason: str) -> None:
-        """비상 정지. API/앱에서 버튼 한 번으로 즉시 호출 — 모든 신규 주문을 차단한다."""
+        """비상 정지. API/앱에서 버튼 한 번으로 즉시 호출 — 모든 신규 주문을 차단한다.
+        이미 브로커에 접수된 미체결 주문은 trading/tasks.py의 poll_pending_order_fills가
+        다음 주기(최대 10초, API 버튼으로 켠 경우 즉시)에 취소한다.
+        """
         await self._kill_switch.engage()
         if self._notifier is not None:
             await self._notifier.notify("kill_switch_engaged", reason)
         if self._audit_log is not None:
             await self._audit_log.record(reason)
+
+    async def apply_startup_default(self, engaged_by_default: bool) -> bool:
+        """KILL_SWITCH_DEFAULT=true면 프로세스가 기동할 때마다 kill switch를 켠다.
+        배포/재시작 직후 사람이 상태를 확인하고 직접 해제하기 전까지 주문이 나가지 않게 하는
+        용도다. 이미 켜져 있으면 알림/감사 로그를 중복으로 남기지 않는다. 새로 켰으면 True.
+        """
+        if not engaged_by_default or await self._kill_switch.is_engaged():
+            return False
+        await self.engage_kill_switch("KILL_SWITCH_DEFAULT=true: 기동 시 비상 정지 상태로 시작")
+        return True
 
     async def release_kill_switch(self) -> None:
         await self._kill_switch.release()
