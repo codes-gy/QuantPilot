@@ -62,6 +62,44 @@ async def _current_position_qty_and_entry(symbol: str) -> tuple[float, float] | 
         return position.quantity, position.avg_entry_price
 
 
+async def _current_position_qty(symbol: str) -> float:
+    """실제 보유 수량 (포지션이 없으면 0)."""
+    async with AsyncSessionLocal() as db:
+        position = await SqlAlchemyPositionRepository(db).get_by_symbol(symbol)
+        return max(position.quantity, 0.0) if position is not None else 0.0
+
+
+async def _checked_entry_quantity(
+    strategy: Strategy, held_quantity: float, risk_guard: RiskGuard
+) -> float | None:
+    """신규 매수 수량을 정하고, (현재 보유 + 이번 매수)가 전략의 최대 포지션 수량을 넘지
+    않는지 확인한다. 넘으면 None(매수 안 함).
+
+    TODO: 지금은 max_position_size 전량을 한 번에 매수하는 단순 사이징이다.
+          분할 매수/자금 배분 등 정교한 사이징 규칙은 이후 개선 대상.
+    """
+    quantity = strategy.max_position_size
+    try:
+        await risk_guard.check_position_size(held_quantity + quantity, strategy.max_position_size)
+    except RiskLimitExceededError as exc:
+        logger.info("entry blocked by position size limit (held %s): %s", held_quantity, exc)
+        return None
+    return quantity
+
+
+def _runnable_asset_classes(live: bool) -> list[AssetClass]:
+    """이 모드에서 평가할 수 있는 자산군. Upbit은 모의투자 서버가 없어 paper 모드에서
+    주문하면 NotImplementedError가 나므로, paper 모드에서는 코인 전략을 아예 평가하지 않는다.
+    """
+    if live:
+        return [AssetClass.KR_STOCK, AssetClass.CRYPTO]
+    logger.warning(
+        "TRADING_MODE=paper: Upbit은 모의투자를 지원하지 않아 CRYPTO 전략은 평가하지 않습니다 "
+        "(활성화돼 있어도 주문이 나가지 않음)."
+    )
+    return [AssetClass.KR_STOCK]
+
+
 async def _evaluate_strategy(
     strategy: Strategy, snapshot: MarketSnapshot, risk_guard: RiskGuard
 ) -> None:
@@ -88,29 +126,29 @@ async def _evaluate_strategy(
     if signal is Signal.HOLD and position is None and strategy.entry_rule:
         candidate = evaluate_entry(strategy.entry_rule, snapshot)
         _submit_guard.entry_evaluated(strategy.id, candidate)
-        if candidate is Signal.BUY:
-            # TODO: 지금은 max_position_size 전량을 한 번에 매수하는 단순 사이징이다.
-            #       분할 매수/자금 배분 등 정교한 사이징 규칙은 이후 개선 대상.
-            try:
-                await risk_guard.check_position_size(
-                    strategy.max_position_size, strategy.max_position_size
-                )
-            except RiskLimitExceededError as exc:
-                logger.info("entry blocked by position size limit: %s", exc)
-            else:
-                signal = candidate
+        signal = candidate
 
     if signal is Signal.HOLD:
         return
 
     # 중복 주문 방지: 방향별 쿨다운/재진입 대기 중이거나, 이 종목에 아직 체결/취소되지 않은
-    # 주문이 있으면 이번 신호는 건너뛴다 (체결이 확정돼 포지션이 갱신된 뒤 다음 틱에서 다시 판단).
+    # (또는 접수 여부가 미확정인) 주문이 있으면 이번 신호는 건너뛴다
+    # (체결이 확정돼 포지션이 갱신된 뒤 다음 틱에서 다시 판단).
     if not _submit_guard.allows(strategy.id, signal, time.monotonic()):
         return
     if await _has_open_order(strategy.symbol):
         return
 
-    quantity = position[0] if signal is Signal.SELL and position is not None else strategy.max_position_size
+    if signal is Signal.BUY:
+        # 평가 시점 이후 체결 폴링이 포지션을 바꿨을 수 있어 실제 보유 수량을 다시 읽는다.
+        held = await _current_position_qty(strategy.symbol)
+        quantity = await _checked_entry_quantity(strategy, held, risk_guard)
+        if quantity is None:
+            return
+    else:
+        quantity = position[0] if position is not None else 0.0
+        if quantity <= 0:
+            return
     submit_order_task.delay(
         client_order_id=str(uuid.uuid4()),
         symbol=strategy.symbol,
@@ -179,15 +217,20 @@ async def _run_asset_class(asset_class: AssetClass, risk_guard: RiskGuard) -> No
 async def run() -> None:
     configure_logging()
     settings = get_settings()
+    settings.assert_safe_to_start()
     risk_guard = RiskGuard(
         kill_switch=RedisKillSwitchRepository(),
         notifier=get_notification_service(),
         daily_pnl=RedisDailyPnlRepository(),
         daily_loss_limit_krw=settings.daily_loss_limit_krw,
     )
+    if await risk_guard.apply_startup_default(settings.kill_switch_default):
+        logger.warning("KILL_SWITCH_DEFAULT=true: kill switch engaged at startup")
     await asyncio.gather(
-        _run_asset_class(AssetClass.KR_STOCK, risk_guard),
-        _run_asset_class(AssetClass.CRYPTO, risk_guard),
+        *(
+            _run_asset_class(asset_class, risk_guard)
+            for asset_class in _runnable_asset_classes(settings.is_live_trading)
+        )
     )
 
 
